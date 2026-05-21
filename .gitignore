@@ -1,0 +1,74 @@
+# 数据文件（不提交到Git）
+data/
+new_data/
+last_data/
+football-data_new/
+*.csv
+*.xlsx
+*.xls
+*.db
+*.sqlite
+*.sqlite3
+
+# 不需要的文件和备份
+_不需要文件/
+backups/
+*.bak
+*.backup
+temp_stats.json
+2025-05-21/
+temp_*.txt
+temp_*.json
+d:football_toolstemp_api_test.json
+
+# 日志文件
+logs/
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+env/
+.venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# 敏感配置
+config/secrets.json
+.env
+*.pem
+*.key
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+tmp/
+temp/
+*.tmp
+
+# 大文件
+*.zip
+*.tar.gz
+*.rar
+
+# Claude相关
+.claude/
+
+# Node modules
+node_modules/

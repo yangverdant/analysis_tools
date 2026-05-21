@@ -1,0 +1,1283 @@
+{
+  "version": "1.0",
+  "updated": "2026-05-20",
+  "apis": {
+    "sportmonks": {
+      "name": "Sportmonks",
+      "description": "足球数据API，覆盖全球联赛/杯赛，数据最全",
+      "base_url": "https://api.sportmonks.com/v3/football",
+      "auth_type": "query_param",
+      "auth_key": "api_token",
+      "api_token": "4iBqABzPSz3JX65i166agPqQiliD4f79vD7o2NrJX1OmMBt7wHJ2ttvxdQoq",
+      "token_url": "https://my.sportmonks.com/api/tokens",
+      "docs_url": "https://docs.sportmonks.com/football",
+      "rate_limit": {
+        "requests_per_minute": 30,
+        "requests_per_month": 1000,
+        "plan": "free",
+        "free_plan_leagues": [
+          "Superliga (DNK SL)",
+          "Premiership (SCO P)",
+          "Premiership Play-Offs (SCO P PO)",
+          "Superliga Play-offs (DNK)"
+        ],
+        "note": "免费计划仅含4个联赛，五大联赛/世界杯需付费"
+      },
+      "request_interval_seconds": 2,
+      "priority": 1,
+      "status": "active",
+      "capabilities": [
+        "livescores",
+        "fixtures",
+        "standings",
+        "teams",
+        "players",
+        "squad",
+        "squad_statistics",
+        "leagues",
+        "seasons",
+        "rounds",
+        "events",
+        "statistics",
+        "trends",
+        "lineups",
+        "odds",
+        "predictions",
+        "xg",
+        "head2head",
+        "weather",
+        "sidelined",
+        "trophies",
+        "career",
+        "pressure",
+        "news",
+        "live_standings",
+        "xgfixture",
+        "referee"
+      ],
+      "data_fields": {
+        "match": [
+          "match_id (fixture.id)",
+          "league_id",
+          "season_id",
+          "round_id / round_name",
+          "starting_at (UTC时间)",
+          "starting_at_timestamp",
+          "state_id (比赛状态)",
+          "venue_id",
+          "name (如 'Getafe vs Real Madrid')",
+          "leg (回合，如 1/1)",
+          "length (比赛时长，默认90)",
+          "has_odds / has_premium_odds",
+          "referee (需include)",
+          "attendance (需include)"
+        ],
+        "team_participant": [
+          "team_id (participant.id)",
+          "name",
+          "short_code",
+          "image_path (logo URL)",
+          "country_id",
+          "venue_id",
+          "founded (成立年份)",
+          "gender",
+          "type (domestic/international)",
+          "meta.location (home/away)",
+          "meta.position (当前排名)",
+          "meta.winner (是否获胜)"
+        ],
+        "scores": [
+          "score.id",
+          "score.fixture_id",
+          "score.type (HT/FT/ET/PT 等)",
+          "score.home_score",
+          "score.away_score"
+        ],
+        "events": [
+          "event.id",
+          "event.fixture_id",
+          "event.type (goal/substitution/card/var/period_start 等)",
+          "event.player_id / player_name",
+          "event.team_id",
+          "event.minute",
+          "event.extra_minute",
+          "event.detail (如 own_goal, penalty, yellow, red 等)",
+          "event.in / event.out (换人)"
+        ],
+        "periods": [
+          "period.id",
+          "period.fixture_id",
+          "period.type (1st_half/2nd_half/extra_time/penalty 等)",
+          "period.starting_at",
+          "period.ending_at",
+          "period.has_scores"
+        ],
+        "standings_detail": [
+          "position",
+          "played",
+          "won",
+          "draw",
+          "lost",
+          "goals_scored",
+          "goals_against",
+          "goal_difference",
+          "points",
+          "form (近5场结果，如 WWDWL)",
+          "home/away 分榜 (需include details.type)"
+        ],
+        "team_detail": [
+          "team_id",
+          "name",
+          "short_code",
+          "image_path",
+          "country_id / country.name",
+          "venue_id / venue.name / venue.capacity / venue.city",
+          "founded",
+          "gender",
+          "type",
+          "coaches (需include)"
+        ],
+        "player_detail": [
+          "player_id",
+          "name / common_name / display_name",
+          "image_path",
+          "country_id / country.name",
+          "position_id / position.name",
+          "date_of_birth",
+          "height / weight",
+          "teams (历史球队，需include)"
+        ],
+        "squad": [
+          "player_id",
+          "player.name",
+          "player.position",
+          "player.country",
+          "transfer_id",
+          "active (是否当前在队)",
+          "started_at / ended_at"
+        ],
+        "league": [
+          "league_id",
+          "name",
+          "short_code",
+          "image_path",
+          "country_id / country.name / country.iso2",
+          "type (league/cup)",
+          "sub_type (domestic/international)",
+          "category",
+          "active",
+          "currentSeason (需include)"
+        ],
+        "season": [
+          "season_id",
+          "name",
+          "league_id",
+          "is_current",
+          "starting_at / ending_at"
+        ],
+        "round": [
+          "round_id",
+          "name (轮次号)",
+          "league_id / season_id / stage_id",
+          "finished",
+          "is_current",
+          "starting_at / ending_at"
+        ],
+        "venue": [
+          "venue_id",
+          "name",
+          "capacity",
+          "city",
+          "country_id",
+          "coordinates (latitude/longitude)",
+          "image_path"
+        ],
+        "odds": [
+          "odds_id",
+          "market_id / market.name (如 Fulltime Result)",
+          "bookmaker_id / bookmaker.name (如 bet365)",
+          "label (如 1/X/2 或 Home/Draw/Away)",
+          "value (赔率值，如 3.50)",
+          "handicap",
+          "total",
+          "starting_at",
+          "odds类型: pre-match (赛前赔率) 和 inplay (滚球赔率)",
+          "50+庄家, 150+市场 (All-In计划)"
+        ],
+        "predictions": [
+          "prediction_id",
+          "fixture_id",
+          "type_id / type.name / type.code",
+          "Fulltime Result Probability: home/draw/away (如 67.18%/19.12%/13.69%)",
+          "Correct Score Probability: scores对象 (如 1-0:10.18%, 2-1:9.49%...)",
+          "Both Teams To Score Probability: yes/no (如 53.4%/46.6%)",
+          "Over/Under 1.5/2.5/3.5/4.5 Probability: yes/no",
+          "Home Over/Under 0.5/1.5/2.5/3.5 Probability: yes/no",
+          "Away Over/Under 0.5/1.5/2.5/3.5 Probability: yes/no",
+          "First Half Winner Probability: home/draw/away",
+          "Half Time/Full Time Probability: home_home/home_draw/home_away/draw_home/draw_draw/draw_away/away_home/away_draw/away_away",
+          "Double Chance Probability: draw_home/draw_away/home_away",
+          "Team To Score First Probability: home/draw/away",
+          "Corners Over/Under 4-11 Probability: yes/no/equal",
+          "predictions为AI预测，仅All-In计划可用"
+        ],
+        "lineups": [
+          "lineup_id",
+          "fixture_id",
+          "team_id",
+          "player_id / player.name",
+          "position_id / position.name",
+          "formation (阵型)",
+          "is_captain",
+          "type (starting/substitute)",
+          "sort_order"
+        ],
+        "statistics": [
+          "stat_id",
+          "fixture_id",
+          "type (如 shots_total, shots_insidebox, attacks, dangerous_attacks, ball_safe, ball_recovery, fouls, corners, offsides, possession, passes_total, passes_accuracy, yellowcards, redcards, saves 等)",
+          "home_value / away_value"
+        ],
+        "fixture_pressure": [
+          "pressure.id",
+          "pressure.fixture_id",
+          "pressure.participant_id",
+          "pressure.minute",
+          "pressure.pressure (0~100+，高值=强烈压迫)",
+          "pressure.participant.name",
+          "仅All-In计划可用"
+        ],
+        "fixture_news": [
+          "prematchNews.id / fixture_id / league_id / title / type",
+          "prematchNews.lines[].text / type (introduction/home/away)",
+          "postmatchNews.id / fixture_id / league_id / title / type",
+          "postmatchNews.lines[].text / type (line)",
+          "仅All-In计划可用"
+        ],
+        "fixture_xgfixture": [
+          "xgfixture.fixture_id / type_id / participant_id / location",
+          "xgfixture.data.value (xG值)",
+          "type_id 5304: Expected Goals (xG)",
+          "type_id 5305: Expected Goals on Target (xGoT)",
+          "type_id 7939: Expected Points (xPTS)",
+          "type_id 7940: Expected Goals Penalties (xGP)",
+          "type_id 7941: Expected Goals Free Kicks (xGFK)",
+          "type_id 7942: Expected Goals Corners (xGC)",
+          "type_id 7943: Expected Goals Non Penalty Goals (npxG)",
+          "type_id 7944: Expected Goals Set Play (xGSP)",
+          "type_id 7945: Expected Goals Open Play (xGOP)",
+          "type_id 9684: Expected Goals Difference (xGD)",
+          "type_id 9685: Shooting Performance (SP)",
+          "type_id 9686: Expected Goals Prevented (xGPrevented)",
+          "type_id 9687: Expected Goals Against (xGA)"
+        ],
+        "fixture_sidelined_detail": [
+          "sidelined.fixture_id / participant_id / player_id",
+          "sideline.id / player_id / type_id / category",
+          "sideline.category: injury 或 suspended",
+          "sideline.start_date / end_date / games_missed / completed",
+          "sideline.player: id/common_name/display_name/image_path/position_id/height/weight/date_of_birth",
+          "sideline.type: id/name/code (如 muscle-injury, hamstring-injury, cruciate-ligament-tear, tendon-rupture, doping-ban, unknown-injury 等)"
+        ],
+        "referee": [
+          "referee.id / common_name / firstname / lastname / display_name",
+          "referee.country_id / country.name",
+          "referee.image_path / date_of_birth",
+          "statistics[].season_id / details[]",
+          "details: type_id 188=Season Matches, 56=Fouls, 84=Yellowcards, 83=Redcards, 85=Yellowred Cards, 47=Penalties, 314=VAR Moments",
+          "details.value: all/home/away (count/average/percentage)",
+          "latest[]: 最近执法比赛(fixture_id + fixture含statistics/participants/scores)"
+        ]
+      },
+      "leagues": {
+        "premier_league": {
+          "id": 8,
+          "short_code": "GB PL",
+          "name_cn": "英超"
+        },
+        "la_liga": {
+          "id": 564,
+          "short_code": "ESP PL",
+          "name_cn": "西甲"
+        },
+        "bundesliga": {
+          "id": 35,
+          "short_code": "GER BL",
+          "name_cn": "德甲"
+        },
+        "serie_a": {
+          "id": 384,
+          "short_code": "ITA SA",
+          "name_cn": "意甲"
+        },
+        "ligue_1": {
+          "id": 301,
+          "short_code": "FR L1",
+          "name_cn": "法甲"
+        },
+        "championship": {
+          "id": 48,
+          "short_code": "GB CH",
+          "name_cn": "英冠"
+        },
+        "eredivisie": {
+          "id": 64,
+          "short_code": "NED ED",
+          "name_cn": "荷甲"
+        },
+        "primeira_liga": {
+          "id": 2,
+          "short_code": "POR PL",
+          "name_cn": "葡超"
+        },
+        "champions_league": {
+          "id": 7,
+          "short_code": "UCL",
+          "name_cn": "欧冠"
+        },
+        "europa_league": {
+          "id": 679,
+          "short_code": "UEL",
+          "name_cn": "欧联"
+        },
+        "conference_league": {
+          "id": 832,
+          "short_code": "UECL",
+          "name_cn": "欧协联"
+        },
+        "bundesliga_2": {
+          "id": 36,
+          "short_code": "GER BL2",
+          "name_cn": "德乙"
+        },
+        "ligue_2": {
+          "id": 302,
+          "short_code": "FR L2",
+          "name_cn": "法乙"
+        },
+        "segunda_division": {
+          "id": 565,
+          "short_code": "ESP SD",
+          "name_cn": "西乙"
+        },
+        "serie_b": {
+          "id": 385,
+          "short_code": "ITA SB",
+          "name_cn": "意乙"
+        }
+      },
+      "endpoints": {
+        "livescores_inplay": {
+          "path": "/livescores/inplay",
+          "method": "GET",
+          "description": "进行中的比赛",
+          "default_include": "participants;scores;periods;events;league.country;round"
+        },
+        "livescores_today": {
+          "path": "/livescores",
+          "method": "GET",
+          "description": "今日所有比赛",
+          "default_include": "participants;scores;periods;events;league.country;round"
+        },
+        "livescores_last": {
+          "path": "/livescores/last",
+          "method": "GET",
+          "description": "最近完成的比赛",
+          "default_include": "participants;scores;league.country;round"
+        },
+        "fixture_detail": {
+          "path": "/fixtures/{id}",
+          "method": "GET",
+          "description": "单场比赛详情",
+          "default_include": "participants;scores;periods;events;stats;league.country;round;venue;referee;lineups"
+        },
+        "fixtures_by_date": {
+          "path": "/fixtures/date/{date}",
+          "method": "GET",
+          "description": "按日期查询赛程 (date: YYYY-MM-DD)",
+          "default_include": "participants;scores;league.country;round"
+        },
+        "fixtures_between": {
+          "path": "/fixtures/between/{from}/{to}",
+          "method": "GET",
+          "description": "日期范围查询赛程",
+          "default_include": "participants;scores;league.country;round"
+        },
+        "league_fixtures": {
+          "path": "/leagues/{league_id}/fixtures",
+          "method": "GET",
+          "description": "联赛赛程",
+          "default_include": "participants;scores;league.country;round"
+        },
+        "season_fixtures": {
+          "path": "/seasons/{season_id}/fixtures",
+          "method": "GET",
+          "description": "赛季赛程",
+          "default_include": "participants;scores;league.country;round"
+        },
+        "team_fixtures": {
+          "path": "/teams/{team_id}/fixtures",
+          "method": "GET",
+          "description": "球队赛程(扁平列表)",
+          "default_include": "participants;scores;league.country;round"
+        },
+        "team_schedule": {
+          "path": "/schedules/teams/{team_id}",
+          "method": "GET",
+          "description": "球队赛程表(按stage→round分组，含杯赛阶段区分)",
+          "default_include": "fixtures.participants;scores;league.country;round",
+          "filters": {
+            "league_id": "过滤特定联赛",
+            "location": "过滤主/客 (home/away)"
+          },
+          "note": "与team_fixtures不同：schedule按阶段和轮次分层组织，杯赛区分小组赛/淘汰赛，一次返回全部无分页"
+        },
+        "standings": {
+          "path": "/standings/seasons/{season_id}",
+          "method": "GET",
+          "description": "赛季积分榜",
+          "default_include": "participant;details;form"
+        },
+        "standings_live": {
+          "path": "/standings/seasons/{season_id}/live",
+          "method": "GET",
+          "description": "实时积分榜",
+          "default_include": "participant;details;form"
+        },
+        "leagues": {
+          "path": "/leagues",
+          "method": "GET",
+          "description": "所有联赛",
+          "default_include": "country;currentSeason"
+        },
+        "league_detail": {
+          "path": "/leagues/{id}",
+          "method": "GET",
+          "description": "联赛详情",
+          "default_include": "country;currentSeason;seasons"
+        },
+        "seasons": {
+          "path": "/seasons",
+          "method": "GET",
+          "description": "所有赛季",
+          "default_include": "league"
+        },
+        "teams": {
+          "path": "/teams/{id}",
+          "method": "GET",
+          "description": "球队详情",
+          "default_include": "country;venue"
+        },
+        "team_squad": {
+          "path": "/teams/{id}/squad",
+          "method": "GET",
+          "description": "球队阵容(基础版)",
+          "default_include": "player.country;player.position"
+        },
+        "team_squad_statistics": {
+          "path": "/squads/teams/{team_id}",
+          "method": "GET",
+          "description": "球队阵容含球员赛季统计(进球/助攻/出场/评分/xG等)",
+          "default_include": "team;player.nationality;player.statistics.details.type;player.position",
+          "filters": {
+            "playerstatisticSeasons": "赛季ID (如 25659)"
+          },
+          "note": "与team_squad不同：此端点返回每个球员的完整赛季统计数据(details)，可按赛季过滤"
+        },
+        "players": {
+          "path": "/players/{id}",
+          "method": "GET",
+          "description": "球员详情(含职业生涯/奖杯/伤病/xG效率)",
+          "default_include": "country;position;teams;trophies;career;stats;sidelined",
+          "note": "stats包含xGlineup数据(每场比赛的xG/xA/评分等), sidelined包含伤病/停赛记录"
+        },
+        "player_xg_efficiency": {
+          "path": "/players/{player_id}",
+          "method": "GET",
+          "description": "球员xG效率分析(每场比赛的xG/xGoT/SP及赛季汇总统计)",
+          "default_include": "latest.xGlineup.type;statistics.details.type;statistics.season.league;statistics.position;latest.fixture.participants;latest.fixture.scores;nationality;latest.fixture.events;latest.fixture.league;teams.team",
+          "filters": {
+            "playerstatisticSeasons": "赛季ID (如 25659)",
+            "playerstatisticdetailTypes": "统计类型ID (如 5304=xG)"
+          },
+          "note": "xGlineup包含每场比赛的xG(5304)/xGoT(5305)/Shooting Performance(9685), SP=Goals-xG"
+        },
+        "rounds": {
+          "path": "/rounds/season/{season_id}",
+          "method": "GET",
+          "description": "赛季轮次",
+          "default_include": "fixtures"
+        },
+        "fixture_trends": {
+          "path": "/fixtures/{id}",
+          "method": "GET",
+          "description": "比赛详情含Trends(实时统计趋势，按分钟变化)",
+          "default_include": "participants;league;venue;state;scores;events.type;events.period;events.player;trends.type;trends.participant",
+          "note": "trends为比赛中的实时统计变化数据，包含dangerous_attacks/shots_total/passes/ball_possession/fouls/tackles等，按minute记录"
+        },
+        "head2head": {
+          "path": "/fixtures/head-to-head/{team1_id}/{team2_id}",
+          "method": "GET",
+          "description": "两队历史交锋记录",
+          "default_include": "participants;scores;league;round",
+          "filters": {
+            "league_id": "过滤特定联赛"
+          }
+        },
+        "match_centre": {
+          "path": "/fixtures/{id}",
+          "method": "GET",
+          "description": "比赛中心(含统计/伤病/天气/阵容/事件)",
+          "default_include": "statistics;sidelined;weatherReport;lineups;events;participants;scores;periods"
+        },
+        "team_season_stats": {
+          "path": "/teams/{team_id}",
+          "method": "GET",
+          "description": "球队赛季统计(射门/控球/传球/犯规/角球/xG等)",
+          "default_include": "statistics.details.type",
+          "filters": {
+            "teamstatisticSeasons": "赛季ID",
+            "teamstatisticdetailTypes": "统计类型ID"
+          }
+        },
+        "team_upcoming_latest": {
+          "path": "/teams/{team_id}",
+          "method": "GET",
+          "description": "球队即将/最近比赛",
+          "default_include": "upcoming.participants;upcoming.league;latest.participants;latest.league;latest.scores"
+        },
+        "calendar": {
+          "path": "/leagues/date/{date}",
+          "method": "GET",
+          "description": "按日期获取联赛赛程日历",
+          "default_include": "today.scores;today.participants;today.stage;today.group;today.round",
+          "note": "date格式: YYYY-MM-DD"
+        },
+        "pressure_index": {
+          "path": "/fixtures/{id}",
+          "method": "GET",
+          "description": "比赛压力指数(每分钟压迫强度，按球队记录)",
+          "default_include": "participants;league;venue;state;scores;events.type;events.player;pressure.participant",
+          "note": "仅All-In计划可用，pressure值范围0~100+，高值=强烈压迫期"
+        },
+        "news_page": {
+          "path": "/fixtures/{id}",
+          "method": "GET",
+          "description": "赛前/赛后AI新闻分析",
+          "default_include": "prematchNews.lines;postmatchNews.lines;participants;league;venue;state;scores;events.type",
+          "note": "仅All-In计划可用，prematchNews含introduction/home/away分析，postmatchNews含赛后总结段落"
+        },
+        "standings_live_league": {
+          "path": "/standings/live/leagues/{league_id}",
+          "method": "GET",
+          "description": "按联赛获取实时积分榜(含当前轮次比赛)",
+          "default_include": "stage;league;details.type;participant",
+          "note": "与standings_live(按season)不同：此端点按league_id获取，返回当前轮次实时积分和比赛数据"
+        },
+        "team_recent_form": {
+          "path": "/teams/{team_id}",
+          "method": "GET",
+          "description": "球队近期状态(含最近比赛统计+xG数据)",
+          "default_include": "latest.statistics.type;latest.xgfixture.type;latest.participants;latest.scores.type",
+          "note": "xgfixture包含每场比赛的xG(5304)/xGoT(5305)/xPTS(7939)/xGP(7940)/xGFK(7941)/xGC(7942)/npxG(7943)/xGSP(7944)/xGOP(7945)/xGD(9684)/SP(9685)/xGPrevented(9686)/xGA(9687)"
+        },
+        "fixture_sidelined": {
+          "path": "/fixtures/{id}",
+          "method": "GET",
+          "description": "比赛伤病/停赛详情(含球员信息和伤病类型)",
+          "default_include": "sidelined.sideline.player;sidelined.sideline.type;participants;league;venue;state",
+          "note": "sideline含详细伤病信息：category(injury/suspended)、start_date、end_date、games_missed、type(如muscle-injury/hamstring-injury/cruciate-ligament-tear/doping-ban等)"
+        },
+        "referee_statistics": {
+          "path": "/referees/{id}",
+          "method": "GET",
+          "description": "裁判统计(含赛季犯规/黄牌/红牌/点球/VAR等及最近比赛)",
+          "default_include": "country;statistics.details.type;statistics.season.league;latest.fixture.statistics;latest.fixture.participants;latest.fixture.league;latest.fixture.scores",
+          "filters": {
+            "refereeStatisticSeasons": "赛季ID (如 23614)"
+          },
+          "note": "statistics含裁判赛季统计(犯规/黄牌/红牌/点球/VAR等，分home/away)，latest含最近执法比赛及统计"
+        }
+      },
+      "world_cup_2026": {
+        "description": "2026世界杯专用数据，需Advanced计划(€69/月)或All-In(€129/月)",
+        "wc_info": {
+          "dates": "2026-06-11 至 2026-07-19",
+          "host_countries": [
+            "加拿大",
+            "美国",
+            "墨西哥"
+          ],
+          "teams": 48,
+          "matches": 104,
+          "format": "12组×4队 → 小组前2+8最佳第3 → 32强淘汰赛",
+          "defending_champion": "阿根廷"
+        },
+        "pricing": {
+          "advanced": "€69/月 (年付€55/月) — 赛程/实时比分/事件/阵容/积分榜/射手榜/淘汰赛对阵图",
+          "all_in": "€129/月 — Advanced全部 + AI预测/xG/Pressure Index/50+庄家赔率(150+市场)",
+          "widgets": "免费 — 嵌入式组件(Hub/Livescore/Bracket/Teams/Live Standings)"
+        },
+        "endpoints": {
+          "wc_fixtures": {
+            "path": "/seasons/{wc_season_id}/fixtures",
+            "method": "GET",
+            "description": "世界杯完整赛程(104场)",
+            "default_include": "participants;scores;league.country;round;venue"
+          },
+          "wc_group_standings": {
+            "path": "/standings/seasons/{wc_season_id}",
+            "method": "GET",
+            "description": "12个小组积分榜",
+            "default_include": "participant;details;form"
+          },
+          "wc_knockout_bracket": {
+            "path": "/standings/seasons/{wc_season_id}/stages",
+            "method": "GET",
+            "description": "淘汰赛对阵图(32强→决赛)",
+            "default_include": "fixtures.participants"
+          },
+          "wc_team_squad": {
+            "path": "/teams/{team_id}/squad",
+            "method": "GET",
+            "description": "国家队大名单(26人/队)",
+            "default_include": "player.country;player.position"
+          },
+          "wc_match_detail": {
+            "path": "/fixtures/{id}",
+            "method": "GET",
+            "description": "比赛详情(含事件/阵容/统计)",
+            "default_include": "participants;scores;periods;events;lineups;stats;venue;referee"
+          },
+          "wc_livescores": {
+            "path": "/livescores/inplay",
+            "method": "GET",
+            "description": "世界杯实时比分",
+            "default_include": "participants;scores;periods;events;league.country;round"
+          }
+        },
+        "data_fields": {
+          "group_stage": [
+            "12个小组积分榜",
+            "position / played / won / draw / lost",
+            "goals_scored / goals_against / goal_difference / points",
+            "form (近5场)",
+            "晋级标记 (小组前2名 + 8个最佳第3名)"
+          ],
+          "knockout_bracket": [
+            "32强 → 16强 → 8强 → 4强 → 决赛 对阵图",
+            "对阵关系 / 晋级路径",
+            "单场淘汰制"
+          ],
+          "squad": [
+            "48支国家队 × 26人名单",
+            "player.name / position / age / club / nationality",
+            "player比赛统计 (射门/传球/抢断/控球)",
+            "player评分"
+          ],
+          "advanced_stats_all_in_only": [
+            "xG (预期进球)",
+            "Pressure Index (压力指数)",
+            "AI预测 (胜率预测)",
+            "赔率数据 (50+庄家, 150+市场, 含赛前和滚球)"
+          ]
+        },
+        "venues": {
+          "usa": [
+            "Atlanta (Mercedes-Benz)",
+            "Boston (Gillette)",
+            "Dallas (AT&T)",
+            "Houston (NRG)",
+            "Kansas City (Arrowhead)",
+            "Los Angeles (SoFi)",
+            "Miami (Hard Rock)",
+            "New York (MetLife)",
+            "Philadelphia (Lincoln Financial)",
+            "San Francisco (Levi's)",
+            "Seattle (Lumen Field)"
+          ],
+          "canada": [
+            "Toronto (BMO Field)",
+            "Vancouver (BC Place)"
+          ],
+          "mexico": [
+            "Guadalajara (Estadio Akron)",
+            "Mexico City (Estadio Azteca)",
+            "Monterrey (Estadio BBVA)"
+          ]
+        }
+      }
+    },
+    "football_data_org": {
+      "name": "football-data.org",
+      "description": "免费足球数据API，覆盖12个T1联赛，10次/分钟",
+      "base_url": "https://api.football-data.org/v4",
+      "auth_type": "header",
+      "auth_header": "X-Auth-Token",
+      "api_token": "944e431594bf477fa85d24fa04d9c2fe",
+      "docs_url": "https://www.football-data.org/documentation/api",
+      "rate_limit": {
+        "requests_per_minute": 10,
+        "plan": "free"
+      },
+      "request_interval_seconds": 7,
+      "priority": 2,
+      "status": "active",
+      "capabilities": [
+        "matches",
+        "standings",
+        "scorers",
+        "squads",
+        "teams",
+        "competitions"
+      ],
+      "data_fields": {
+        "match": [
+          "match_id",
+          "matchday (轮次)",
+          "utcDate (UTC时间)",
+          "status (SCHEDULED/TIMED/IN_PLAY/PAUSED/FINISHED/POSTPONED/CANCELLED/SUSPENDED)",
+          "homeTeam.shortName / tla / id",
+          "awayTeam.shortName / tla / id",
+          "score.fullTime.home / away",
+          "score.halfTime.home / away",
+          "score.extraTime.home / away",
+          "score.penalties.home / away",
+          "group (分组，杯赛用)",
+          "stage (GROUP_STAGE/QUARTER_FINALS 等)",
+          "competition.code / name / emblem",
+          "season.startDate / endDate / currentMatchday",
+          "referees (裁判列表)",
+          "odds (赔率，需付费)"
+        ],
+        "standings": [
+          "position",
+          "team.shortName / tla / crest",
+          "playedGames",
+          "won / draw / lost",
+          "goalsFor / goalsAgainst / goalDifference",
+          "points",
+          "form (近5场)",
+          "type (TOTAL/HOME/AWAY)"
+        ],
+        "scorers": [
+          "player.name / id",
+          "team.shortName / tla",
+          "goals",
+          "assists",
+          "penalties",
+          "playedMatches"
+        ],
+        "team": [
+          "id",
+          "name / shortName / tla",
+          "crest (logo URL)",
+          "address",
+          "website",
+          "founded",
+          "clubColors",
+          "venue",
+          "squad (阵容列表: player.name/id/position/nationality/dateOfBirth/countryCode)"
+        ],
+        "person": [
+          "id",
+          "name / firstName / lastName",
+          "dateOfBirth",
+          "nationality",
+          "section (位置: attacker/midfielder/defender/goalkeeper)",
+          "position",
+          "currentTeam"
+        ],
+        "competition": [
+          "id / code / name / emblem",
+          "type (LEAGUE/CUP)",
+          "country.name / code / flag",
+          "seasons (历史赛季列表)",
+          "currentSeason.startDate / endDate / currentMatchday / winner"
+        ]
+      },
+      "competitions": {
+        "PL": {
+          "name": "premier_league",
+          "name_cn": "英超"
+        },
+        "PD": {
+          "name": "la_liga",
+          "name_cn": "西甲"
+        },
+        "BL1": {
+          "name": "bundesliga",
+          "name_cn": "德甲"
+        },
+        "SA": {
+          "name": "serie_a",
+          "name_cn": "意甲"
+        },
+        "FL1": {
+          "name": "ligue_1",
+          "name_cn": "法甲"
+        },
+        "DED": {
+          "name": "eredivisie",
+          "name_cn": "荷甲"
+        },
+        "PPL": {
+          "name": "primeira_liga",
+          "name_cn": "葡超"
+        },
+        "BSA": {
+          "name": "brasileirao",
+          "name_cn": "巴甲"
+        },
+        "WC": {
+          "name": "world_cup",
+          "name_cn": "世界杯"
+        },
+        "EC": {
+          "name": "euro_championship",
+          "name_cn": "欧洲杯"
+        },
+        "CL": {
+          "name": "champions_league",
+          "name_cn": "欧冠"
+        },
+        "ELC": {
+          "name": "championship",
+          "name_cn": "英冠"
+        }
+      },
+      "endpoints": {
+        "today_matches": {
+          "path": "/matches",
+          "method": "GET",
+          "description": "今日所有比赛"
+        },
+        "competition_matches": {
+          "path": "/competitions/{code}/matches",
+          "method": "GET",
+          "description": "联赛比赛列表",
+          "params": {
+            "season": "int, 可选"
+          }
+        },
+        "competition_standings": {
+          "path": "/competitions/{code}/standings",
+          "method": "GET",
+          "description": "联赛积分榜",
+          "params": {
+            "season": "int, 可选"
+          }
+        },
+        "competition_scorers": {
+          "path": "/competitions/{code}/scorers",
+          "method": "GET",
+          "description": "射手榜",
+          "params": {
+            "season": "int, 可选",
+            "limit": "int, 默认100"
+          }
+        },
+        "team_detail": {
+          "path": "/teams/{id}",
+          "method": "GET",
+          "description": "球队详情(含阵容)"
+        },
+        "match_detail": {
+          "path": "/matches/{id}",
+          "method": "GET",
+          "description": "比赛详情"
+        },
+        "person_detail": {
+          "path": "/persons/{id}",
+          "method": "GET",
+          "description": "球员/教练详情"
+        }
+      }
+    },
+    "thesportsdb": {
+      "name": "TheSportsDB",
+      "description": "免费体育数据API，无需Key，覆盖多运动项目",
+      "base_url": "https://www.thesportsdb.com/api/v1/json/3",
+      "auth_type": "none",
+      "docs_url": "https://www.thesportsdb.com/api.php",
+      "rate_limit": {
+        "plan": "free",
+        "note": "无明确限制，建议间隔1秒"
+      },
+      "request_interval_seconds": 1,
+      "priority": 4,
+      "status": "active",
+      "capabilities": [
+        "livescores",
+        "events",
+        "leagues",
+        "teams",
+        "players"
+      ],
+      "data_fields": {
+        "event": [
+          "idEvent",
+          "strEvent (如 'Arsenal vs Chelsea')",
+          "strLeague / idLeague",
+          "dateEvent / strTime",
+          "strHomeTeam / idHomeTeam",
+          "strAwayTeam / idAwayTeam",
+          "intHomeScore / intAwayScore",
+          "intRound",
+          "strStatus",
+          "strVenue",
+          "strThumb / strVideo (缩略图/视频)",
+          "strHomeGoalDetails / strAwayGoalDetails (进球详情文本)",
+          "strHomeRedCards / strAwayRedCards",
+          "strHomeYellowCards / strAwayYellowCards",
+          "strHomeLineupGoalkeeper / strAwayLineupGoalkeeper",
+          "strHomeLineupDefense / strAwayLineupDefense",
+          "strHomeLineupMidfield / strAwayLineupMidfield",
+          "strHomeLineupForward / strAwayLineupForward",
+          "strHomeFormation / strAwayFormation"
+        ],
+        "league": [
+          "idLeague",
+          "strLeague / strLeagueAlternate",
+          "strSport",
+          "strBadge (logo URL)"
+        ],
+        "team": [
+          "idTeam",
+          "strTeam / strTeamShort / strAlternate",
+          "strLeague",
+          "strStadium / strStadiumLocation / intStadiumCapacity",
+          "strWebsite / strFacebook / strTwitter / strInstagram",
+          "strTeamBadge / strTeamJersey / strTeamLogo",
+          "strDescriptionEN"
+        ],
+        "player": [
+          "idPlayer",
+          "strPlayer / strPlayerAlternate",
+          "strNationality",
+          "dateBorn / dateSigned",
+          "strPosition / strPosition2",
+          "strHeight / strWeight",
+          "strTeam",
+          "strThumb / strCutout / strRender (头像)"
+        ]
+      },
+      "endpoints": {
+        "events_by_day": {
+          "path": "/eventsday.php",
+          "method": "GET",
+          "description": "按日期获取比赛",
+          "params": {
+            "d": "YYYYMMDD",
+            "s": "Soccer"
+          }
+        },
+        "event_detail": {
+          "path": "/lookupevent.php",
+          "method": "GET",
+          "description": "比赛详情",
+          "params": {
+            "id": "event id"
+          }
+        },
+        "league_details": {
+          "path": "/lookupleague.php",
+          "method": "GET",
+          "description": "联赛详情",
+          "params": {
+            "id": "league id"
+          }
+        },
+        "team_details": {
+          "path": "/lookupteam.php",
+          "method": "GET",
+          "description": "球队详情",
+          "params": {
+            "id": "team id"
+          }
+        },
+        "team_next_events": {
+          "path": "/eventsnext.php",
+          "method": "GET",
+          "description": "球队下一场比赛",
+          "params": {
+            "id": "team id"
+          }
+        },
+        "team_last_events": {
+          "path": "/eventslast.php",
+          "method": "GET",
+          "description": "球队最近比赛",
+          "params": {
+            "id": "team id"
+          }
+        }
+      }
+    },
+    "scorebat": {
+      "name": "ScoreBat",
+      "description": "免费足球视频API，可从标题解析比分",
+      "base_url": "https://www.scorebat.com/video-api/v3",
+      "auth_type": "none",
+      "docs_url": "https://www.scorebat.com/video-api/",
+      "rate_limit": {
+        "plan": "free",
+        "note": "无明确限制，建议间隔1秒"
+      },
+      "request_interval_seconds": 1,
+      "priority": 5,
+      "status": "active",
+      "capabilities": [
+        "livescores",
+        "highlights"
+      ],
+      "data_fields": {
+        "video_highlight": [
+          "title (如 'Team1 2-1 Team2'，可解析比分)",
+          "competition.name / competition.id",
+          "date",
+          "matchviewUrl (比赛页面URL)",
+          "competitionViewUrl (联赛页面URL)",
+          "thumbnail (缩略图URL)",
+          "videos (视频列表: embed, url, type(sdk/video))"
+        ]
+      },
+      "endpoints": {
+        "all_videos": {
+          "path": "/",
+          "method": "GET",
+          "description": "所有比赛视频/集锦(含比分)",
+          "response_note": "从title字段解析比分，格式: 'Team1 2-1 Team2'"
+        }
+      }
+    },
+    "365scores": {
+      "name": "365Scores",
+      "description": "实时比分数据，无需Key",
+      "base_url": "https://webws.365scores.com/web",
+      "auth_type": "none",
+      "rate_limit": {
+        "plan": "free",
+        "note": "无明确限制，建议间隔2秒"
+      },
+      "request_interval_seconds": 2,
+      "priority": 6,
+      "status": "active",
+      "capabilities": [
+        "livescores",
+        "fixtures"
+      ],
+      "data_fields": {
+        "fixture": [
+          "gameId",
+          "homeCompetitor / awayCompetitor (队名+ID)",
+          "homeScore / awayScore",
+          "gameTime (比赛进行时间)",
+          "gameStatus (not_started/playing/finished 等)",
+          "competition.name / id",
+          "startTime",
+          "stadium.name / city",
+          "events (进球/换人/卡片事件列表)"
+        ]
+      },
+      "endpoints": {
+        "fixtures": {
+          "path": "/games/fixtures",
+          "method": "GET",
+          "description": "实时赛程/比分",
+          "params": {
+            "langId": "1",
+            "timezoneName": "Asia/Shanghai",
+            "userCountryId": "1",
+            "appTypeId": "1"
+          }
+        }
+      }
+    },
+    "deepseek": {
+      "name": "DeepSeek AI",
+      "description": "AI分析模型，用于比赛预测和分析",
+      "base_url": "https://spanagent.xyz/v1",
+      "auth_type": "header_bearer",
+      "api_key": "sk-0Uj687veHGqP4f6dvTflFtfhAn52hOXuQUJ6A9Zb94DAayT1",
+      "model": "deepseek-v4-pro",
+      "docs_url": "https://platform.deepseek.com/api-docs",
+      "rate_limit": {
+        "requests_per_minute": 60,
+        "max_tokens": 4096,
+        "plan": "paid"
+      },
+      "request_interval_seconds": 1,
+      "priority": 10,
+      "status": "active",
+      "capabilities": [
+        "match_analysis",
+        "prediction",
+        "commentary"
+      ],
+      "data_fields": {
+        "chat_response": [
+          "content (AI生成的分析文本)",
+          "model",
+          "usage.prompt_tokens",
+          "usage.completion_tokens",
+          "usage.total_tokens"
+        ]
+      },
+      "endpoints": {
+        "chat_completions": {
+          "path": "/chat/completions",
+          "method": "POST",
+          "description": "聊天补全(OpenAI兼容)",
+          "params": {
+            "model": "deepseek-v4-pro",
+            "messages": "array of {role, content}",
+            "temperature": "0.7",
+            "max_tokens": "4096"
+          }
+        }
+      },
+      "pricing": {
+        "input_price_per_1k_tokens": 0.01,
+        "output_price_per_1k_tokens": 0.01
+      }
+    },
+    "fbref": {
+      "name": "FBref Scraper",
+      "description": "FBref网站爬虫，获取免费足球数据",
+      "base_url": "https://fbref.com",
+      "auth_type": "none",
+      "rate_limit": {
+        "plan": "free",
+        "note": "爬虫需遵守robots.txt，建议间隔3秒"
+      },
+      "request_interval_seconds": 3,
+      "priority": 7,
+      "status": "active",
+      "capabilities": [
+        "matches",
+        "standings",
+        "player_stats",
+        "team_stats",
+        "advanced_stats"
+      ],
+      "data_fields": {
+        "match": [
+          "Date / Time",
+          "HomeTeam / AwayTeam",
+          "FTHG / FTAG (全场比分)",
+          "HTHG / HTAG (半场比分)",
+          "FTR / HTR (结果 H/D/A)",
+          "Referee",
+          "HS / AS (射门)",
+          "HST / AST (射正)",
+          "HF / AF (犯规)",
+          "HC / AC (角球)",
+          "HY / AY (黄牌)",
+          "HR / AR (红牌)",
+          "Attendance",
+          "B365H / B365D / B365A (Bet365赔率)",
+          "BWH / BWD / BWA (Bet&Win赔率)",
+          "其他赔率列 (WH/VC/PS 等)"
+        ],
+        "standings": [
+          "Rk (排名)",
+          "Team",
+          "MP (场次)",
+          "W / D / L",
+          "GF / GA / GD",
+          "Pts",
+          "Attendance",
+          "Top Team Scorer",
+          "Goalkeeper",
+          "Notes (晋级/降级标记)"
+        ],
+        "player_stats": [
+          "Player / Nation / Pos",
+          "Age",
+          "MP / Starts / Min",
+          "90s",
+          "Gls / Ast / G+A / G-PK",
+          "PK / PKatt",
+          "CrdY / CrdR",
+          "xG / npxG / xAG",
+          "PrgC / PrgP / PrgR (渐进数据)",
+          "高级统计: 射门/传球/带球/防守/持球等"
+        ],
+        "team_stats": [
+          "Squad Size / Avg Age",
+          "Possession",
+          "MP / W / D / L",
+          "GF / GA / GD / Pts",
+          "xG / xGA / xGD",
+          "Attendance",
+          "GK统计 / 射门统计 / 传球统计 / 防守统计"
+        ],
+        "advanced_stats": [
+          "xG (预期进球)",
+          "xGA (预期失球)",
+          "xAG (预期助攻)",
+          "npxG (非点球预期进球)",
+          "SCA (射门创造动作)",
+          "GCA (进球创造动作)",
+          "Progressive passes/carries/receptions",
+          "Pressures / Tackles / Interceptions",
+          "Pass types / Pass targets",
+          "Shot creating actions detail"
+        ]
+      },
+      "leagues": [
+        "K-League",
+        "J-League",
+        "Nordic leagues",
+        "MLS",
+        "Liga MX",
+        "Brazilian Serie A",
+        "Europa League"
+      ]
+    }
+  },
+  "usage_strategy": {
+    "description": "API使用策略：按优先级选择数据源，免费额度优先",
+    "livescores": {
+      "primary": "sportmonks",
+      "fallback": [
+        "thesportsdb",
+        "scorebat",
+        "365scores"
+      ],
+      "note": "实时比分优先用Sportmonks，额度不足时降级"
+    },
+    "fixtures": {
+      "primary": "sportmonks",
+      "fallback": [
+        "football_data_org"
+      ],
+      "note": "赛程数据Sportmonks覆盖最广"
+    },
+    "standings": {
+      "primary": "football_data_org",
+      "fallback": [
+        "sportmonks"
+      ],
+      "note": "积分榜football-data.org免费额度充足，优先使用"
+    },
+    "matches": {
+      "primary": "football_data_org",
+      "fallback": [
+        "sportmonks"
+      ],
+      "note": "五大联赛比赛数据用football-data.org"
+    },
+    "analysis": {
+      "primary": "deepseek",
+      "fallback": [],
+      "note": "AI分析仅DeepSeek"
+    },
+    "supplementary": {
+      "primary": "fbref",
+      "fallback": [],
+      "note": "补充联赛数据(J联赛、K联赛、MLS等)用FBref爬虫"
+    }
+  }
+}
