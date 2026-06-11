@@ -1,0 +1,120 @@
+======================================================================
+  v3.8诊断: 信号覆盖在2-3区间的影响
+======================================================================
+  总比赛数: 13993
+
+  === 信号覆盖类型统计 (2-3区间) ===
+
+  flip_home_to_away: n=79
+  模型argmax: 33/79=41.8%
+  赔率argmax: 21/79=26.6%
+  模型改赔率: 改对31 改错42 净-11
+  示例:
+    2023-08-18 Mallorca vs Villarreal (la_liga) odds_h=2.95
+      score=0-1 actual=away 赔率→home 模型→away
+      signal=-0.3675 euro_conf=0.35
+      模型: h=22.8% d=33.6% a=43.6%
+    2023-08-27 Newcastle United vs Liverpool (premier_league) odds_h=2.20
+      score=1-2 actual=away 赔率→home 模型→home
+      signal=-0.1811 euro_conf=0.43
+      模型: h=36.5% d=27.5% a=35.9%
+    2023-09-16 1. FSV Mainz 05 vs VfB Stuttgart (bundesliga) odds_h=2.55
+      score=1-3 actual=away 赔率→home 模型→away
+      signal=-0.1853 euro_conf=0.37
+      模型: h=29.6% d=31.0% a=39.5%
+    2023-09-23 Stade Brestois 29 vs Olympique Lyon (ligue_1) odds_h=2.53
+      score=1-0 actual=home 赔率→home 模型→away
+      signal=-0.2316 euro_conf=0.36
+      模型: h=27.8% d=31.2% a=41.0%
+    2023-09-24 Rayo Vallecano vs Villarreal (la_liga) odds_h=2.52
+      score=1-1 actual=draw 赔率→home 模型→away
+      signal=-0.2761 euro_conf=0.38
+      模型: h=28.0% d=31.1% a=40.9%
+    2023-09-30 Getafe vs Villarreal (la_liga) odds_h=2.93
+      score=0-0 actual=draw 赔率→home 模型→away
+      signal=-0.3377 euro_conf=0.35
+      模型: h=16.3% d=40.2% a=43.5%
+    2023-12-06 Crystal Palace vs Bournemouth (premier_league) odds_h=2.27
+      score=0-2 actual=away 赔率→home 模型→away
+      signal=-0.3101 euro_conf=0.42
+      模型: h=30.9% d=32.1% a=37.0%
+    2023-12-17 Bologna vs Roma (serie_a) odds_h=2.44
+      score=2-0 actual=home 赔率→home 模型→draw
+      signal=-0.1729 euro_conf=0.39
+      模型: h=28.3% d=38.9% a=32.8%
+    2024-01-02 Valencia vs Villarreal (la_liga) odds_h=2.05
+      score=3-1 actual=home 赔率→home 模型→away
+      signal=-0.4886 euro_conf=0.44
+      模型: h=28.1% d=30.4% a=41.5%
+    2024-01-13 Las Palmas vs Villarreal (la_liga) odds_h=2.52
+      score=3-0 actual=home 赔率→home 模型→away
+      signal=-0.2692 euro_conf=0.37
+      模型: h=27.4% d=30.5% a=42.1%
+
+  flip_away_to_home: n=9
+  模型argmax: 4/9=44.4%
+  赔率argmax: 4/9=44.4%
+  模型改赔率: 改对4 改错5 净-1
+  示例:
+    2023-12-06 Manchester United vs Chelsea (premier_league) odds_h=2.82
+      score=2-1 actual=home 赔率→away 模型→home
+      signal=0.3778 euro_conf=0.39
+      模型: h=44.0% d=29.9% a=26.1%
+    2024-05-15 Manchester United vs Newcastle United (premier_league) odds_h=2.73
+      score=3-2 actual=home 赔率→away 模型→home
+      signal=0.3917 euro_conf=0.40
+      模型: h=45.6% d=27.2% a=27.2%
+    2025-04-27 FC Nantes vs Toulouse (Ligue 1) odds_h=2.94
+      score=0-0 actual=draw 赔率→away 模型→draw
+      signal=0.2214 euro_conf=0.37
+      模型: h=38.1% d=38.9% a=23.0%
+    2025-11-22 1. FC Koln vs Eintracht Frankfurt (bundesliga) odds_h=2.91
+      score=3-4 actual=away 赔率→away 模型→home
+      signal=0.1670 euro_conf=0.39
+      模型: h=38.0% d=29.6% a=32.4%
+    2025-12-06 Sassuolo vs Fiorentina (Serie A) odds_h=2.87
+      score=3-1 actual=home 赔率→away 模型→draw
+      signal=0.1656 euro_conf=0.36
+      模型: h=36.7% d=38.0% a=25.3%
+    2025-12-14 Nottingham vs Tottenham Hotspur (Premier League) odds_h=2.83
+      score=3-0 actual=home 赔率→away 模型→home
+      signal=0.2219 euro_conf=0.37
+      模型: h=41.5% d=28.2% a=30.3%
+    2026-01-21 Platense Municipal vs Municipal Limeno (bundesliga) odds_h=2.82
+      score=0-1 actual=away 赔率→away 模型→draw
+      signal=0.3044 euro_conf=0.36
+      模型: h=38.8% d=43.7% a=17.5%
+    2026-01-25 FC Nantes vs OGC Nice (Ligue 1) odds_h=2.88
+      score=1-4 actual=away 赔率→away 模型→home
+      signal=0.1675 euro_conf=0.37
+      模型: h=37.7% d=32.1% a=30.1%
+    2026-03-04 Aston Villa vs Chelsea (Premier League) odds_h=2.70
+      score=1-4 actual=away 赔率→away 模型→home
+      signal=0.2043 euro_conf=0.37
+      模型: h=39.7% d=30.8% a=29.4%
+
+  no_override: n=4118
+  模型argmax: 1677/4118=40.7%
+  赔率argmax: 1726/4118=41.9%
+  模型改赔率: 改对235 改错527 净-292
+
+  === flip按信号强度 ===
+  |signal|<0.2: n=31 模型=35.5% 赔率=25.8%
+  |signal|0.2-0.3: n=34 模型=44.1% 赔率=35.3%
+  |signal|0.3-0.5: n=22 模型=50.0% 赔率=22.7%
+  |signal|>0.5: n=1 模型=0.0% 赔率=0.0%
+
+  === 按odds子区间 ===
+  odds 2.0-2.2: n=1140
+  模型=44.6% 赔率=45.3%
+  flip: n=11 改对3 改错8
+  odds 2.2-2.5: n=1560
+  模型=40.0% 赔率=39.9%
+  flip: n=41 改对22 改错19
+  odds 2.5-3.0: n=1506
+  模型=38.6% 赔率=40.6%
+  flip: n=36 改对12 改错24
+
+======================================================================
+  诊断完成
+======================================================================

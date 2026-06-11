@@ -1,0 +1,34 @@
+======================================================================
+  v3.8完整验证: 所有改动综合效果
+======================================================================
+
+  === v3.8完整验证 ===
+  v3.4: argmax=6949/13993=49.66% Brier=0.6051
+  v3.8: argmax=7005/13993=50.06% Brier=0.6047
+  变化: argmax +0.40pp Brier -0.0004
+  净收益: +56场
+  预测改变: 864场
+  2023-08-05 Laval vs Angers (ligue_2) score=1-0 v3.4=draw(✗) v3.8=home(✓)
+  2023-08-11 Almeria vs Rayo Vallecano (la_liga) score=0-2 v3.4=draw(✗) v3.8=home(✗)
+  2023-08-11 Amorebieta vs Levante (la_liga_2) score=1-1 v3.4=draw(✓) v3.8=away(✗)
+  2023-08-12 Las Palmas vs Mallorca (la_liga) score=1-1 v3.4=draw(✓) v3.8=home(✗)
+  2023-08-12 Santander vs Eibar (la_liga_2) score=4-0 v3.4=draw(✗) v3.8=away(✗)
+  2023-08-14 Mirandes vs Alcorcon (la_liga_2) score=4-0 v3.4=draw(✗) v3.8=away(✗)
+  2023-08-18 Bari vs Palermo (serie_b) score=0-0 v3.4=draw(✓) v3.8=home(✗)
+  2023-08-19 Fulham vs Brentford (premier_league) score=0-3 v3.4=draw(✗) v3.8=away(✓)
+  2023-08-19 Osasuna vs Athletic Bilbao (la_liga) score=0-2 v3.4=draw(✗) v3.8=away(✓)
+  2023-08-19 Alcorcon vs Leganes (la_liga_2) score=0-2 v3.4=draw(✗) v3.8=home(✗)
+  2023-08-19 Cosenza vs Ascoli (serie_b) score=3-0 v3.4=draw(✗) v3.8=home(✓)
+  2023-08-19 Annecy vs Dunkerque (ligue_2) score=3-0 v3.4=draw(✗) v3.8=away(✗)
+  2023-08-19 Pau FC vs Paris Saint-Germain (ligue_2) score=2-0 v3.4=draw(✗) v3.8=home(✓)
+  2023-08-20 Le Havre vs Stade Brestois 29 (ligue_1) score=1-2 v3.4=draw(✗) v3.8=away(✓)
+  2023-08-21 Granada vs Rayo Vallecano (la_liga) score=0-2 v3.4=draw(✗) v3.8=away(✓)
+  2023-08-21 Huesca vs Tenerife (la_liga_2) score=0-2 v3.4=draw(✗) v3.8=away(✓)
+  2023-08-26 Granada vs Mallorca (la_liga) score=3-2 v3.4=draw(✗) v3.8=home(✓)
+  2023-08-26 Millwall vs Stoke City (championship) score=1-0 v3.4=draw(✗) v3.8=home(✓)
+  2023-08-26 FeralpiSalo vs Sudtirol (serie_b) score=0-2 v3.4=draw(✗) v3.8=home(✗)
+  2023-08-27 Leganes vs Albacete (la_liga_2) score=2-0 v3.4=draw(✗) v3.8=home(✓)
+
+======================================================================
+  验证完成
+======================================================================

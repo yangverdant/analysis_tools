@@ -306,6 +306,239 @@ class MotivationAnalyzer:
 
         return descriptions.get(motivation_type, f'目前第{position}位，{points}分。')
 
+    def analyze_motivation_simplified(
+        self,
+        home_team_id: int,
+        away_team_id: int,
+        match_date: str = None,
+        match_profile=None,
+        conn: sqlite3.Connection = None
+    ) -> Dict:
+        """国家队/友谊赛等无积分榜场景的简化动机评估
+
+        基于FIFA排名、赛事重要性、赛程密度推断动机
+        """
+        own_conn = conn is None
+        if own_conn:
+            conn = self.get_connection()  # has row_factory
+        elif not hasattr(conn, 'row_factory') or conn.row_factory is None:
+            conn.row_factory = sqlite3.Row
+
+        cursor = conn.cursor()
+
+        def _get_team_info(tid):
+            cursor.execute("SELECT team_id, name_en, team_type FROM teams WHERE team_id = ?", (tid,))
+            row = cursor.fetchone()
+            if row and hasattr(row, 'keys'):
+                return row
+            elif row:
+                return {'team_id': row[0], 'name_en': row[1], 'team_type': row[2]}
+            return None
+
+        home_info = _get_team_info(home_team_id)
+        away_info = _get_team_info(away_team_id)
+
+        home_type = home_info['team_type'] if home_info else 'club'
+        away_type = away_info['team_type'] if away_info else 'club'
+
+        # 获取FIFA排名(国家队)
+        home_fifa = self._get_fifa_rank(home_team_id, conn)
+        away_fifa = self._get_fifa_rank(away_team_id, conn)
+
+        # 获取Elo(通用)
+        home_elo = self._get_team_elo_rating(home_team_id, conn)
+        away_elo = self._get_team_elo_rating(away_team_id, conn)
+
+        # 休息天数
+        home_rest = self.calculate_rest_days(home_team_id, match_date, conn) if match_date else 7
+        away_rest = self.calculate_rest_days(away_team_id, match_date, conn) if match_date else 7
+
+        # 动机推断
+        home_motivation = self._infer_simplified_motivation(
+            home_team_id, home_type, home_fifa, home_elo, home_rest,
+            match_date, match_profile, conn
+        )
+        away_motivation = self._infer_simplified_motivation(
+            away_team_id, away_type, away_fifa, away_elo, away_rest,
+            match_date, match_profile, conn
+        )
+
+        urgency_diff = home_motivation['urgency'] - away_motivation['urgency']
+
+        if urgency_diff >= 20:
+            advantage = 'home'
+            level = 'significant'
+            description = '主队动机更强'
+        elif urgency_diff >= 10:
+            advantage = 'home'
+            level = 'moderate'
+            description = '主队动机略强'
+        elif urgency_diff <= -20:
+            advantage = 'away'
+            level = 'significant'
+            description = '客队动机更强'
+        elif urgency_diff <= -10:
+            advantage = 'away'
+            level = 'moderate'
+            description = '客队动机略强'
+        else:
+            advantage = 'balanced'
+            level = 'neutral'
+            description = '两队动机相近'
+
+        result = {
+            'home_team_id': home_team_id,
+            'away_team_id': away_team_id,
+            'method': 'simplified',
+            'home_motivation': home_motivation,
+            'away_motivation': away_motivation,
+            'comparison': {
+                'urgency_difference': urgency_diff,
+                'advantage': advantage,
+                'level': level,
+                'description': description
+            }
+        }
+
+        if own_conn:
+            conn.close()
+
+        return result
+
+    def _get_fifa_rank(self, team_id: int, conn) -> Optional[int]:
+        """获取FIFA排名"""
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT rank FROM fifa_rankings
+            WHERE team_id = ?
+            ORDER BY rank_date DESC LIMIT 1
+        """, (team_id,))
+        row = cursor.fetchone()
+        if row:
+            return int(row['rank']) if hasattr(row, 'keys') else int(row[0])
+        return None
+
+    def _get_team_elo_rating(self, team_id: int, conn) -> float:
+        """获取Elo评分"""
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT elo_rating FROM elo_ratings
+            WHERE team_id = ? LIMIT 1
+        """, (team_id,))
+        row = cursor.fetchone()
+        if row:
+            return float(row['elo_rating']) if hasattr(row, 'keys') else float(row[0])
+        return 1500.0
+
+    def _infer_simplified_motivation(
+        self, team_id, team_type, fifa_rank, elo, rest_days,
+        match_date, match_profile, conn
+    ) -> Dict:
+        """推断简化动机 — 基于多信号"""
+        urgency = 50  # 基线
+        signals = []
+        motivation_type = 'normal'
+        motivation_level = 'medium'
+
+        # 1. FIFA排名动机 — 排名低的队更想在强队面前证明自己
+        if fifa_rank:
+            if fifa_rank <= 10:
+                urgency += 5  # 豪门有荣誉感
+                signals.append(f'FIFA第{fifa_rank}，豪门')
+            elif fifa_rank <= 30:
+                urgency += 10  # 二线队想冲击更高排名
+                signals.append(f'FIFA第{fifa_rank}，冲击中')
+            elif fifa_rank <= 60:
+                urgency += 15  # 中游队很想证明自己
+                signals.append(f'FIFA第{fifa_rank}，证明欲强')
+            else:
+                urgency += 8  # 弱队也想赢但能力有限
+                signals.append(f'FIFA第{fifa_rank}，弱队')
+
+        # 2. 赛事类型动机
+        if match_profile:
+            ct = match_profile.competition_type.value if hasattr(match_profile, 'competition_type') else ''
+            if ct == 'wc_qualifier':
+                urgency += 25  # 世预赛极其重要
+                motivation_type = 'qualifier'
+                signals.append('世预赛出线关键战')
+            elif ct == 'nations_league':
+                urgency += 15  # 欧国联有升降级
+                motivation_type = 'nations_league'
+                signals.append('欧国联')
+            elif ct == 'tournament_intl':
+                urgency += 20  # 大赛正赛
+                motivation_type = 'tournament'
+                signals.append('大赛正赛')
+            elif ct == 'friendly_intl':
+                urgency -= 15  # 友谊赛动机低
+                motivation_type = 'friendly'
+                signals.append('友谊赛动机低')
+                # 友谊赛弱队更有动力(锻炼价值)
+                if fifa_rank and fifa_rank > 30:
+                    urgency += 8
+                    signals.append('弱队锻炼意愿')
+            elif ct == 'cup':
+                urgency += 10  # 杯赛有荣誉
+                motivation_type = 'cup'
+                signals.append('杯赛')
+
+        # 3. 休息/疲劳因素
+        if rest_days <= 2:
+            urgency -= 10  # 疲劳降低动机
+            signals.append(f'休息{rest_days}天，疲劳')
+        elif rest_days >= 7:
+            urgency += 5  # 充分准备
+            signals.append(f'休息{rest_days}天，充沛')
+        elif rest_days >= 5:
+            urgency += 3
+            signals.append(f'休息{rest_days}天，正常')
+
+        # 4. 赛程密度(近14天比赛数)
+        if match_date:
+            density = self._count_recent_matches(team_id, match_date, 14, conn)
+            if density >= 4:
+                urgency -= 8
+                signals.append(f'14天{density}场，密集')
+            elif density >= 3:
+                urgency -= 3
+                signals.append(f'14天{density}场，正常')
+
+        # 确定等级
+        if urgency >= 70:
+            motivation_level = 'high'
+        elif urgency >= 45:
+            motivation_level = 'medium'
+        else:
+            motivation_level = 'low'
+
+        urgency = max(0, min(100, urgency))
+
+        return {
+            'team_id': team_id,
+            'team_type': team_type,
+            'fifa_rank': fifa_rank,
+            'elo': elo,
+            'rest_days': rest_days,
+            'motivation_type': motivation_type,
+            'motivation_level': motivation_level,
+            'urgency': urgency,
+            'signals': signals,
+        }
+
+    def _count_recent_matches(self, team_id, match_date, days, conn) -> int:
+        """计算最近N天的比赛数"""
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) as cnt FROM matches
+            WHERE (home_team_id = ? OR away_team_id = ?)
+            AND match_date <= ?
+            AND date(match_date) >= date(?, ?||' days')
+            AND status = 'finished'
+        """, (team_id, team_id, match_date, match_date, str(-days)))
+        row = cursor.fetchone()
+        return int(row['cnt']) if row else 0
+
     def compare_teams_motivation(
         self,
         home_team_id: int,

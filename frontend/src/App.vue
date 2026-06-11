@@ -65,13 +65,15 @@
       <!-- 内容区 -->
       <div class="content-area">
         <!-- 路由视图 - 用于详情页面 -->
-        <router-view v-if="$route.path.startsWith('/match/') || $route.path.startsWith('/team/') || $route.path.startsWith('/league/')"></router-view>
+        <router-view v-if="$route.path.startsWith('/match/') || $route.path.startsWith('/team/') || $route.path.startsWith('/league/') || $route.path.startsWith('/analysis/')"></router-view>
 
         <!-- 主页面组件切换 -->
         <HomePanel v-else-if="currentPage === '首页'" />
+        <DailyCycle v-else-if="currentPage === '日循环'" />
         <MatchPreview v-else-if="currentPage === '赛事前瞻'" />
         <DataView v-else-if="currentPage === '数据查看'" />
         <AnalysisCenter v-else-if="currentPage === '分析中心'" />
+        <LotteryCenter v-else-if="currentPage === '体彩中心'" />
         <DataCenter v-else-if="currentPage === '数据中心'" />
         <Favorites v-else-if="currentPage === '我的收藏'" />
         <Calendar v-else-if="currentPage === '比赛日历'" />
@@ -99,7 +101,9 @@ import Calendar from './components/Calendar.vue'
 import Teams from './components/Teams.vue'
 import Settings from './components/Settings.vue'
 import HomePanel from './components/HomePanel.vue'
+import DailyCycle from './components/DailyCycle.vue'
 import DataCenter from './components/DataCenter.vue'
+import LotteryCenter from './components/LotteryCenter.vue'
 
 // 图标组件 - 使用 defineComponent 包装
 const createIcon = (name, classStr, paths) => defineComponent({
@@ -151,6 +155,12 @@ const SettingsIcon = createIcon('SettingsIcon', 'w-3 h-3', [
   h('path', { d: 'M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z' })
 ])
 
+const LotteryIcon = createIcon('LotteryIcon', 'w-3 h-3', [
+  h('circle', { cx: '12', cy: '12', r: '10' }),
+  h('path', { d: 'M12 6v6l4 2' }),
+  h('path', { d: 'M8 14h8' })
+])
+
 const SearchIcon = defineComponent({
   name: 'SearchIcon',
   setup: () => () => h('svg', { class: 'w-3 h-3', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2' }, [
@@ -192,7 +202,9 @@ export default {
     Teams,
     Settings,
     HomePanel,
+    DailyCycle,
     DataCenter,
+    LotteryCenter,
     HomeIcon,
     ActivityIcon,
     DatabaseIcon,
@@ -201,6 +213,7 @@ export default {
     CalendarIcon,
     UsersIcon,
     SettingsIcon,
+    LotteryIcon,
     SearchIcon,
     BellIcon,
     MoonIcon,
@@ -209,14 +222,16 @@ export default {
   },
   setup() {
     const router = useRouter()
-    const currentPage = ref('赛事前瞻')
+    const currentPage = ref('体彩中心')
     const searchQuery = ref('')
     const sidebarOpen = ref(false)
     const syncStatus = ref(null)
 
     const navItems = [
       { icon: 'HomeIcon', label: '首页' },
+      { icon: 'ActivityIcon', label: '日循环' },
       { icon: 'ActivityIcon', label: '赛事前瞻' },
+      { icon: 'LotteryIcon', label: '体彩中心' },
       { icon: 'DatabaseIcon', label: '数据查看' },
       { icon: 'BarChartIcon', label: '分析中心' },
       { icon: 'DatabaseIcon', label: '数据中心' },

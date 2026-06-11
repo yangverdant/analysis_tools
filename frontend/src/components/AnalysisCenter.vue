@@ -4,18 +4,25 @@
     <div class="header card">
       <div class="header-content">
         <h2><ActivityIcon /> 分析中心</h2>
-        <p>比赛智能分析与预测 · 即将开始的比赛</p>
+        <p>比赛智能分析与预测 · 闭环学习</p>
+      </div>
+      <div class="tab-switch">
+        <button class="tab-btn" :class="{ active: activeTab === 'matches' }" @click="activeTab = 'matches'">比赛预测</button>
+        <button class="tab-btn" :class="{ active: activeTab === 'accuracy' }" @click="activeTab = 'accuracy'">准确率追踪</button>
       </div>
     </div>
 
+    <!-- 准确率追踪面板 -->
+    <AccuracyDashboard v-if="activeTab === 'accuracy'" />
+
     <!-- 加载状态 -->
-    <div class="loading-state" v-if="loading">
+    <div class="loading-state" v-if="loading && activeTab === 'matches'">
       <div class="spinner"></div>
       <p>正在分析比赛数据...</p>
     </div>
 
     <!-- 比赛分析列表 -->
-    <div class="matches-analysis" v-else>
+    <div class="matches-analysis" v-if="activeTab === 'matches' && !loading">
       <div
         class="match-analysis-card card"
         v-for="match in matchAnalysisList"
@@ -94,6 +101,7 @@
 import { ref, computed, watch, onMounted, h, defineComponent } from 'vue'
 import { useRouter } from 'vue-router'
 import { matchAPI } from '../api'
+import AccuracyDashboard from './AccuracyDashboard.vue'
 
 // 图标组件
 const ActivityIcon = defineComponent({
@@ -147,10 +155,11 @@ const InboxIcon = defineComponent({
 
 export default {
   name: 'AnalysisCenter',
-  components: { ActivityIcon, CalendarIcon, ChevronLeftIcon, ChevronRightIcon, InboxIcon },
+  components: { ActivityIcon, CalendarIcon, ChevronLeftIcon, ChevronRightIcon, InboxIcon, AccuracyDashboard },
   setup() {
     const router = useRouter()
     const loading = ref(false)
+    const activeTab = ref('matches')
     const matchAnalysisList = ref([])
 
     // 计算比赛倒计时
@@ -182,7 +191,7 @@ export default {
       loading.value = true
       try {
         // 获取即将开始的比赛（未开始的比赛）
-        const matchesRes = await matchAPI.getUpcoming(30)  // 获取30天内即将开始的比赛
+        const matchesRes = await matchAPI.getUpcoming(30)
         if (matchesRes.data) {
           const matches = matchesRes.data
 
@@ -190,10 +199,42 @@ export default {
           const analysisPromises = matches.map(async (match) => {
             try {
               const analysisRes = await matchAPI.getAnalysisSummary(match.match_id)
-              if (analysisRes.data) {
+              if (analysisRes) {
+                const data = analysisRes
+                // 将嵌套的 API 数据映射为前端期望的扁平结构
+                const prediction = data.prediction || {}
+                const probs = prediction.probabilities || {}
+                const elo = (data.analysis_details || {}).elo || {}
+                const h2h = (data.analysis_details || {}).h2h || {}
+                const form = (data.analysis_details || {}).form || {}
+                const matchInfo = data.match_info || {}
+
                 return {
                   ...match,
-                  ...analysisRes.data
+                  // Elo 评分
+                  home_elo: Math.round(elo.home_elo || 0),
+                  away_elo: Math.round(elo.away_elo || 0),
+                  // 预测概率（转换为百分比）
+                  prediction: {
+                    home_win: Math.round((probs.home_win || 0) * 100),
+                    draw: Math.round((probs.draw || 0) * 100),
+                    away_win: Math.round((probs.away_win || 0) * 100)
+                  },
+                  predicted_result: prediction.predicted_result || '',
+                  confidence: Math.round((prediction.confidence || 0) * 100),
+                  // H2H 交锋记录
+                  h2h: h2h.total_matches > 0 ? {
+                    total: h2h.total_matches || 0,
+                    home_wins: (h2h.overall_record || {}).team1_wins || 0,
+                    draws: (h2h.overall_record || {}).draws || 0,
+                    away_wins: (h2h.overall_record || {}).team2_wins || 0
+                  } : null,
+                  // 分析摘要
+                  summary: data.report ? data.report.split('\n').slice(1, 4).join(' ') : '分析完成',
+                  // 球队中文名（从 match_info 获取）
+                  home_team_cn: (matchInfo.home_team || {}).name_cn || match.home_team_cn || match.home_team,
+                  away_team_cn: (matchInfo.away_team || {}).name_cn || match.away_team_cn || match.away_team,
+                  league_cn: (matchInfo.league || {}).name_cn || match.league_cn || match.league
                 }
               }
               return match
@@ -230,6 +271,7 @@ export default {
 
     return {
       loading,
+      activeTab,
       matchAnalysisList,
       goToMatchDetail,
       getCountdown

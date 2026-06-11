@@ -1,0 +1,27 @@
+======================================================================
+  v3.8+精调: dt30 reduce分档最优组合
+======================================================================
+  base=0.005 ah0+0.00: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.005 ah0+0.01: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.005 ah0+0.02: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.005 ah0+0.03: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.005 ah0+0.04: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.010 ah0+0.00: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.010 ah0+0.01: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.010 ah0+0.02: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.010 ah0+0.03: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.010 ah0+0.04: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.015 ah0+0.00: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.015 ah0+0.01: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.015 ah0+0.02: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.015 ah0+0.03: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.015 ah0+0.04: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.020 ah0+0.00: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.020 ah0+0.01: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.020 ah0+0.02: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.020 ah0+0.03: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+  base=0.020 ah0+0.04: argmax=7005/13993=50.06% Brier=0.6047 net=+56 | dt30+AH0=N/A dt30非AH0=N/A draw_prec=20.7%
+
+======================================================================
+  实验完成
+======================================================================

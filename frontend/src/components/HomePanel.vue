@@ -1,5 +1,18 @@
 <template>
   <div class="home-panel">
+    <!-- 搜索栏 -->
+    <div class="search-section">
+      <div class="search-box">
+        <SearchIcon />
+        <input
+          type="text"
+          v-model="searchQuery"
+          placeholder="搜索球队、球员、赛事"
+          @input="handleSearch"
+        />
+      </div>
+    </div>
+
     <!-- 欢迎区域 -->
     <div class="welcome-section">
       <div class="welcome-content">
@@ -7,11 +20,11 @@
         <p>今日有 {{ todayMatches.length }} 场比赛，{{ upcomingCount }} 场即将开始</p>
       </div>
       <div class="quick-actions">
-        <button class="action-btn primary">
+        <button class="action-btn primary" @click="goToTodayMatches">
           <ActivityIcon />
           查看今日比赛
         </button>
-        <button class="action-btn">
+        <button class="action-btn" @click="goToFavorites">
           <StarIcon />
           我的收藏
         </button>
@@ -72,6 +85,7 @@
             <div class="match-teams">
               <div class="team home">
                 <span class="team-name">{{ match.home_team_cn || match.home_team }}</span>
+                <span class="elo-tag" v-if="match.home_elo">Elo {{ match.home_elo }}</span>
               </div>
               <div class="score-box">
                 <span class="score">{{ match.home_goals ?? '-' }}</span>
@@ -80,6 +94,27 @@
               </div>
               <div class="team away">
                 <span class="team-name">{{ match.away_team_cn || match.away_team }}</span>
+                <span class="elo-tag" v-if="match.away_elo">Elo {{ match.away_elo }}</span>
+              </div>
+            </div>
+            <div class="match-analysis" v-if="match.analysis_summary">
+              <span class="analysis-summary">{{ match.analysis_summary }}</span>
+              <div class="prob-bars" v-if="match.home_win_prob != null">
+                <div class="prob-item">
+                  <span class="prob-label">主</span>
+                  <div class="prob-bar-wrap"><div class="prob-bar home" :style="{ width: match.home_win_prob + '%' }"></div></div>
+                  <span class="prob-val">{{ match.home_win_prob }}%</span>
+                </div>
+                <div class="prob-item">
+                  <span class="prob-label">平</span>
+                  <div class="prob-bar-wrap"><div class="prob-bar draw" :style="{ width: match.draw_prob + '%' }"></div></div>
+                  <span class="prob-val">{{ match.draw_prob }}%</span>
+                </div>
+                <div class="prob-item">
+                  <span class="prob-label">客</span>
+                  <div class="prob-bar-wrap"><div class="prob-bar away" :style="{ width: match.away_win_prob + '%' }"></div></div>
+                  <span class="prob-val">{{ match.away_win_prob }}%</span>
+                </div>
               </div>
             </div>
             <div class="match-footer">
@@ -101,7 +136,7 @@
           <div class="section-header">
             <h2><TrophyIcon /> 热门联赛</h2>
           </div>
-          <div class="leagues-list">
+          <div class="leagues-list" v-if="popularLeagues.length">
             <div class="league-item" v-for="league in popularLeagues" :key="league.league_id" @click="goToLeague(league.league_id)">
               <span class="league-icon">⚽</span>
               <div class="league-info">
@@ -111,6 +146,9 @@
               <ChevronRightIcon class="arrow" />
             </div>
           </div>
+          <div v-else class="no-data-small">
+            <p>暂无联赛数据</p>
+          </div>
         </div>
 
         <!-- FIFA排名 -->
@@ -118,12 +156,15 @@
           <div class="section-header">
             <h2><GlobeIcon /> FIFA排名 TOP 5</h2>
           </div>
-          <div class="ranking-list">
+          <div class="ranking-list" v-if="fifaRankings.length">
             <div class="ranking-item" v-for="(team, index) in fifaRankings.slice(0, 5)" :key="team.rank">
               <span class="rank" :class="'rank-' + (index + 1)">{{ team.rank }}</span>
               <span class="country">{{ team.country_cn || team.country }}</span>
               <span class="points">{{ team.points }}</span>
             </div>
+          </div>
+          <div v-else class="no-data-small">
+            <p>暂无排名数据</p>
           </div>
         </div>
       </div>
@@ -133,23 +174,26 @@
     <div class="section upcoming-section">
       <div class="section-header">
         <h2><ClockIcon /> 即将开始</h2>
-        <a href="#" class="view-all">查看全部 →</a>
+        <a href="#" class="view-all" @click.prevent="goToUpcoming">查看全部 →</a>
       </div>
-      <div class="upcoming-grid">
-        <div class="upcoming-card" v-for="match in upcomingMatches.slice(0, 6)" :key="match.match_id">
+      <div class="upcoming-grid" v-if="upcomingMatches.length">
+        <div class="upcoming-card" v-for="match in upcomingMatches.slice(0, 6)" :key="match.match_id" @click="goToMatch(match)">
           <div class="match-league">{{ match.league_cn || match.league }}</div>
           <div class="match-teams">
             <span class="team">{{ match.home_team_cn || match.home_team }}</span>
             <span class="vs">VS</span>
             <span class="team">{{ match.away_team_cn || match.away_team }}</span>
           </div>
-          <div class="match-date">{{ formatDate(match.match_date) }}</div>
+          <div class="match-date">{{ formatDate(match.match_date) }} {{ match.beijing_time || match.match_time || '' }}</div>
           <div class="match-odds" v-if="match.home_odds">
             <span class="odd">主{{ match.home_odds }}</span>
             <span class="odd">平{{ match.draw_odds }}</span>
             <span class="odd">客{{ match.away_odds }}</span>
           </div>
         </div>
+      </div>
+      <div v-else class="no-data">
+        <p>暂无即将开始的比赛</p>
       </div>
     </div>
   </div>
@@ -209,29 +253,35 @@ const ChevronRightIcon = createIcon('ChevronRightIcon', [
   h('polyline', { points: '9 18 15 12 9 6' })
 ])
 
+const SearchIcon = createIcon('SearchIcon', [
+  h('circle', { cx: '11', cy: '11', r: '8' }),
+  h('line', { x1: '21', y1: '21', x2: '16.65', y2: '16.65' })
+])
+
 export default {
   name: 'HomePanel',
-  components: { CalendarIcon, ActivityIcon, StarIcon, RadioIcon, ClockIcon, TrophyIcon, GlobeIcon, ChevronRightIcon },
+  components: { CalendarIcon, ActivityIcon, StarIcon, RadioIcon, ClockIcon, TrophyIcon, GlobeIcon, ChevronRightIcon, SearchIcon },
   setup() {
     const todayMatches = ref([])
     const upcomingMatches = ref([])
     const popularLeagues = ref([])
     const fifaRankings = ref([])
     const loading = ref(false)
+    const searchQuery = ref('')
 
     // 计算属性
     const liveMatches = computed(() => {
-      return todayMatches.value.filter(m => m.status === 'Live' || m.status === 'Today').length
+      return todayMatches.value.filter(m => m.status === 'live' || m.status === 'Live' || m.status === 'Today').length
     })
 
     const upcomingCount = computed(() => {
-      return todayMatches.value.filter(m => m.status === 'Scheduled' || !m.status).length
+      return todayMatches.value.filter(m => m.status === 'scheduled' || m.status === 'Scheduled' || !m.status).length
     })
 
     const favoritesCount = ref(0)
 
     const getStatusText = (status) => {
-      const statusMap = { 'Live': '进行中', 'Today': '今日', 'Finished': '已结束', 'Scheduled': '未开始' }
+      const statusMap = { 'live': '进行中', 'Live': '进行中', 'Today': '今日', 'finished': '已结束', 'Finished': '已结束', 'scheduled': '未开始', 'Scheduled': '未开始' }
       return statusMap[status] || '未开始'
     }
 
@@ -243,6 +293,15 @@ export default {
 
     const goToMatch = (match) => console.log('Go to match:', match)
     const goToLeague = (id) => console.log('Go to league:', id)
+    const goToTodayMatches = () => console.log('Go to today matches')
+    const goToFavorites = () => console.log('Go to favorites')
+    const goToUpcoming = () => console.log('Go to upcoming')
+
+    const handleSearch = () => {
+      if (searchQuery.value.trim()) {
+        console.log('Search:', searchQuery.value)
+      }
+    }
 
     const loadData = async () => {
       loading.value = true
@@ -263,7 +322,7 @@ export default {
           })
           // 提取即将开始的比赛（未开始的取前6场）
           upcomingMatches.value = todayMatches.value
-            .filter(m => m.status === 'Scheduled' || !m.status)
+            .filter(m => m.status === 'scheduled' || m.status === 'Scheduled' || !m.status)
             .slice(0, 6)
         }
 
@@ -288,7 +347,9 @@ export default {
     return {
       todayMatches, upcomingMatches, popularLeagues, fifaRankings,
       liveMatches, upcomingCount, favoritesCount, loading,
-      getStatusText, formatDate, goToMatch, goToLeague
+      getStatusText, formatDate, goToMatch, goToLeague,
+      goToTodayMatches, goToFavorites, goToUpcoming,
+      searchQuery, handleSearch
     }
   }
 }
@@ -299,6 +360,47 @@ export default {
   display: flex;
   flex-direction: column;
   gap: 24px;
+}
+
+/* 搜索栏 */
+.search-section {
+  margin-bottom: 8px;
+}
+
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #151922;
+  border-radius: 12px;
+  padding: 14px 20px;
+  border: 1px solid rgba(31, 41, 55, 0.5);
+  transition: all 0.2s;
+}
+
+.search-box:focus-within {
+  border-color: rgba(16, 185, 129, 0.5);
+  background: #1a2332;
+}
+
+.search-box svg {
+  width: 18px;
+  height: 18px;
+  color: #6b7280;
+  flex-shrink: 0;
+}
+
+.search-box input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  font-size: 14px;
+  color: #e5e7eb;
+}
+
+.search-box input::placeholder {
+  color: #6b7280;
 }
 
 /* 欢迎区域 */
@@ -332,8 +434,8 @@ export default {
 .action-btn {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 20px;
+  gap: 6px;
+  padding: 10px 16px;
   border-radius: 8px;
   font-size: 14px;
   font-weight: 500;
@@ -342,6 +444,13 @@ export default {
   background: rgba(255,255,255,0.05);
   color: #e5e7eb;
   transition: all 0.2s;
+  white-space: nowrap;
+}
+
+.action-btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 
 .action-btn:hover {
@@ -506,6 +615,71 @@ export default {
   font-size: 14px;
   font-weight: 500;
   color: #e5e7eb;
+}
+
+.elo-tag {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  margin-left: 6px;
+}
+
+.match-analysis {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(255,255,255,0.03);
+  border-radius: 6px;
+}
+
+.analysis-summary {
+  font-size: 12px;
+  color: #9ca3af;
+  display: block;
+  margin-bottom: 6px;
+}
+
+.prob-bars {
+  display: flex;
+  gap: 6px;
+}
+
+.prob-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+
+.prob-label {
+  font-size: 10px;
+  color: #6b7280;
+  min-width: 12px;
+}
+
+.prob-bar-wrap {
+  flex: 1;
+  height: 4px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.prob-bar {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.prob-bar.home { background: #10b981; }
+.prob-bar.draw { background: #6b7280; }
+.prob-bar.away { background: #60a5fa; }
+
+.prob-val {
+  font-size: 10px;
+  color: #9ca3af;
+  min-width: 24px;
+  text-align: right;
 }
 
 .score-box {
@@ -721,5 +895,55 @@ export default {
 
 .no-data p {
   font-size: 12px;
+}
+
+.no-data-small {
+  text-align: center;
+  padding: 16px;
+  color: #6b7280;
+}
+
+.no-data-small p {
+  font-size: 12px;
+}
+
+/* 响应式 */
+@media (max-width: 1024px) {
+  .main-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .stats-row {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .upcoming-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .welcome-section {
+    flex-direction: column;
+    text-align: center;
+    gap: 16px;
+  }
+
+  .quick-actions {
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .action-btn {
+    justify-content: center;
+  }
+
+  .stats-row {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .upcoming-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

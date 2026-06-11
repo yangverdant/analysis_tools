@@ -114,30 +114,27 @@
       <div v-else class="no-data">暂无积分榜数据</div>
 
       <!-- 联赛介绍 -->
-      <div class="league-info" v-if="leagueRules">
+      <div class="league-info" v-if="leagueInfo">
         <h4>联赛介绍</h4>
-        <p class="league-name">{{ leagueRules.name }}</p>
-        <p class="info-row">
-          <span>{{ leagueRules.country }}</span>
-          <span>·</span>
-          <span>成立于{{ leagueRules.founded }}年</span>
+        <p class="league-name">{{ leagueInfo.name_cn || leagueInfo.name_en }}</p>
+        <p class="info-row" v-if="leagueInfo.intro">
+          <span>{{ leagueInfo.intro }}</span>
         </p>
-        <p class="info-row" v-if="leagueRules.teams">
-          <span>{{ leagueRules.teams }}支球队</span>
-          <span>·</span>
-          <span>每队{{ leagueRules.matches_per_team }}场</span>
+        <p class="info-row" v-if="leagueInfo.rules && leagueInfo.rules.teams_count">
+          <span>{{ leagueInfo.rules.teams_count }}支球队</span>
+          <span v-if="leagueInfo.rules.matches_per_team">·</span>
+          <span v-if="leagueInfo.rules.matches_per_team">每队{{ leagueInfo.rules.matches_per_team }}场</span>
         </p>
-        <p class="info-row" v-if="leagueRules.format_desc">
-          <span>赛制: {{ leagueRules.format_desc }}</span>
+        <p class="info-row" v-if="leagueInfo.format_desc">
+          <span>{{ leagueInfo.format_desc }}</span>
         </p>
-        <p class="info-row" v-if="leagueRules.relegation_spots">
-          <span>降级: 后{{ leagueRules.relegation_spots }}名</span>
-          <span v-if="leagueRules.champions_league_spots">·</span>
-          <span v-if="leagueRules.champions_league_spots">欧冠: 前{{ leagueRules.champions_league_spots }}名</span>
-        </p>
-        <p class="info-row" v-if="leagueRules.var_enabled">
-          <span>VAR: {{ leagueRules.var_enabled ? '启用' : '未启用' }}</span>
-        </p>
+        <div class="spots-row" v-if="leagueInfo.rules">
+          <span class="spot-tag cl" v-if="leagueInfo.rules.champions_league_spots">欧冠 {{ leagueInfo.rules.champions_league_spots }}</span>
+          <span class="spot-tag el" v-if="leagueInfo.rules.europa_league_spots">欧联 {{ leagueInfo.rules.europa_league_spots }}</span>
+          <span class="spot-tag ecl" v-if="leagueInfo.rules.conference_league_spots">欧会杯 {{ leagueInfo.rules.conference_league_spots }}</span>
+          <span class="spot-tag promo" v-if="leagueInfo.rules.promotion_spots">升级 {{ leagueInfo.rules.promotion_spots }}</span>
+          <span class="spot-tag rel" v-if="leagueInfo.rules.relegation_spots">降级 {{ leagueInfo.rules.relegation_spots }}</span>
+        </div>
       </div>
     </div>
   </div>
@@ -157,7 +154,8 @@ export default {
   setup(props) {
     const roundGroups = ref([])
     const standings = ref([])
-    const leagueRules = ref(null)
+    const leagueInfo = ref(null)
+const leagueRules = ref(null)
     const loading = ref(false)
     const selectedRound = ref('all')
     const roundMatches = ref([])
@@ -169,7 +167,25 @@ export default {
       if (!props.leagueId) return
       loading.value = true
       try {
-        // 如果父组件没有传递轮次列表，自己获取
+        // 加载积分榜（独立，不依赖比赛数据）
+        try {
+          const standingsRes = await leagueAPI.getStandings(props.leagueId, props.season)
+          if (standingsRes.data) standings.value = standingsRes.data
+        } catch (e) {
+          console.error('加载积分榜失败:', e)
+        }
+
+        // 加载联赛详情（含规则和介绍）
+        try {
+          const detailRes = await leagueAPI.getLeague(props.leagueId)
+          if (detailRes.data) {
+            leagueInfo.value = detailRes.data
+          }
+        } catch (e) {
+          console.error('加载联赛详情失败:', e)
+        }
+
+        // 加载比赛数据
         let roundsToUse = props.availableRounds
         if (!roundsToUse || roundsToUse.length === 0) {
           try {
@@ -183,20 +199,22 @@ export default {
           }
         }
 
-        // 如果选择了特定轮次，只获取该轮次
         if (selectedRound.value && selectedRound.value !== 'all') {
-          const matchesRes = await leagueAPI.getMatchesByRound(props.leagueId, selectedRound.value, props.season)
-          if (matchesRes.data) {
-            roundMatches.value = matchesRes.data.sort((a, b) => {
-              const timeA = a.beijing_time?.beijing_time || a.match_time || ''
-              const timeB = b.beijing_time?.beijing_time || b.match_time || ''
-              return timeA.localeCompare(timeB)
-            })
-            roundFinished.value = matchesRes.data.filter(m => m.home_goals !== null && m.away_goals !== null).length
-            roundUpcoming.value = matchesRes.data.filter(m => m.home_goals === null || m.away_goals === null).length
+          try {
+            const matchesRes = await leagueAPI.getMatchesByRound(props.leagueId, selectedRound.value, props.season)
+            if (matchesRes.data) {
+              roundMatches.value = matchesRes.data.sort((a, b) => {
+                const timeA = a.beijing_time?.beijing_time || a.match_time || ''
+                const timeB = b.beijing_time?.beijing_time || b.match_time || ''
+                return timeA.localeCompare(timeB)
+              })
+              roundFinished.value = matchesRes.data.filter(m => m.home_goals !== null && m.away_goals !== null).length
+              roundUpcoming.value = matchesRes.data.filter(m => m.home_goals === null || m.away_goals === null).length
+            }
+          } catch (e) {
+            console.error('获取轮次比赛失败:', e)
           }
-        } else if (roundsToUse.length) {
-          // 按轮次获取所有比赛
+        } else if (roundsToUse && roundsToUse.length) {
           const groups = []
           for (const roundNum of roundsToUse) {
             try {
@@ -220,14 +238,6 @@ export default {
           }
           roundGroups.value = groups.sort((a, b) => b.round - a.round)
         }
-
-        const [standingsRes, rulesRes] = await Promise.all([
-          leagueAPI.getStandings(props.leagueId, props.season),
-          leagueAPI.getLeagueRules(props.leagueId)
-        ])
-
-        if (standingsRes.data) standings.value = standingsRes.data
-        if (rulesRes.data) leagueRules.value = rulesRes.data
       } catch (e) {
         console.error('加载联赛数据失败:', e)
       } finally {
@@ -295,7 +305,7 @@ export default {
 
     onMounted(loadData)
 
-    return { roundGroups, standings, leagueRules, loading, selectedRound, formatDate, formatMatchTime, formatOdds, getRowClass, roundMatches, roundFinished, roundUpcoming }
+    return { roundGroups, standings, leagueInfo, loading, selectedRound, formatDate, formatMatchTime, formatOdds, getRowClass, roundMatches, roundFinished, roundUpcoming }
   }
 }
 </script>
@@ -599,6 +609,26 @@ export default {
   display: flex;
   gap: 6px;
 }
+
+.spots-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.spot-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.spot-tag.cl { background: rgba(59, 130, 246, 0.15); color: #60a5fa; }
+.spot-tag.el { background: rgba(251, 191, 36, 0.15); color: #fbbf24; }
+.spot-tag.ecl { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+.spot-tag.promo { background: rgba(96, 165, 250, 0.15); color: #60a5fa; }
+.spot-tag.rel { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
 
 .no-data {
   flex: 1;

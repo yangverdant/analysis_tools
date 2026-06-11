@@ -1,0 +1,97 @@
+======================================================================
+  v3.5 场景详细分析 — 数据完整比赛
+======================================================================
+  数据完整比赛数: 4716
+
+  === 数据完整比赛总体指标 ===
+  v3.4: argmax=2535/4716=53.8%  Brier=0.5793
+  v3.5: argmax=2535/4716=53.8%  Brier=0.5793
+  变化: argmax +0.00pp  Brier -0.0000
+
+  === 动机不对称冷门 (触发16场) ===
+  2024-05-04 Real Sociedad vs Las Palmas (la_liga)
+    odds=1.35 score=2-0 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=70.9% → v3.5=65.9%
+  2024-08-23 Paris Saint-Germain vs Montpellier (Ligue 1)
+    odds=1.23 score=6-0 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=78.6% → v3.5=77.6%
+  2024-10-30 Atalanta vs Monza (Serie A)
+    odds=1.31 score=2-0 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=72.5% → v3.5=71.5%
+  2024-11-02 Eintracht Frankfurt vs VfL Bochum (Bundesliga)
+    odds=1.33 score=7-2 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=66.4% → v3.5=65.4%
+  2024-11-30 Paris Saint-Germain vs FC Nantes (Ligue 1)
+    odds=1.21 score=1-1 actual=draw
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✗ v3.5=home✗ 
+    hp: v3.4=81.3% → v3.5=80.3%
+  2025-02-16 Eintracht Frankfurt vs Holstein Kiel (Bundesliga)
+    odds=1.33 score=3-1 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=70.8% → v3.5=69.8%
+  2025-02-23 Athletic Bilbao vs Real Valladolid (La Liga)
+    odds=1.16 score=7-1 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=81.0% → v3.5=80.0%
+  2025-03-29 Real Sociedad vs Real Valladolid (La Liga)
+    odds=1.34 score=2-1 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=69.3% → v3.5=68.3%
+  2025-04-24 Real Betis vs Real Valladolid (La Liga)
+    odds=1.19 score=5-1 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=81.5% → v3.5=78.5%
+  2025-05-10 Mallorca vs Real Valladolid (La Liga)
+    odds=1.34 score=2-1 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=71.4% → v3.5=66.3%
+  2025-09-14 Paris Saint-Germain vs RC Lens (Ligue 1)
+    odds=1.31 score=2-0 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=71.0% → v3.5=70.0%
+  2025-12-06 Paris Saint-Germain vs Stade Rennais (Ligue 1)
+    odds=1.28 score=5-0 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=72.5% → v3.5=71.5%
+  2026-01-16 Paris Saint-Germain vs Lille (Ligue 1)
+    odds=1.31 score=3-0 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=72.8% → v3.5=71.8%
+  2026-03-06 Paris Saint-Germain vs AS Monaco (Ligue 1)
+    odds=1.34 score=1-3 actual=away
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✗ v3.5=home✗ 
+    hp: v3.4=68.8% → v3.5=67.8%
+  2026-04-19 Paris Saint-Germain vs Olympique Lyon (Ligue 1)
+    odds=1.28 score=1-2 actual=away
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✗ v3.5=home✗ 
+    hp: v3.4=72.2% → v3.5=69.2%
+  2026-04-22 Paris Saint-Germain vs FC Nantes (Ligue 1)
+    odds=1.17 score=3-0 actual=home
+    home_cat=dead_rubber away_cat=relegation diff=-2.6
+    v3.4=home✓ v3.5=home✓ 
+    hp: v3.4=81.4% → v3.5=78.4%
+Traceback (most recent call last):
+  File "D:\football_tools\fetchers\scripts\validate_v35_detail.py", line 338, in <module>
+    main()
+  File "D:\football_tools\fetchers\scripts\validate_v35_detail.py", line 259, in main
+    mismatch_results = defaultdict(int)
+NameError: name 'defaultdict' is not defined

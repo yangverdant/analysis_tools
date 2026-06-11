@@ -1,0 +1,27 @@
+======================================================================
+  v3.8.1 按联赛模型表现 (model vs odds)
+======================================================================
+
+  === 模型最差的联赛 (gap最小) ===
+  Libert       n= 570 model=45.8% odds=51.8% gap=-6.0pp
+  conference_league n=1192 model=43.0% odds=48.2% gap=-5.3pp
+  world_cup    n= 128 model=40.6% odds=45.3% gap=-4.7pp
+  primeira_liga n=1073 model=41.8% odds=44.5% gap=-2.6pp
+  Ligue2       n= 685 model=45.7% odds=47.0% gap=-1.3pp
+  EFL          n=1104 model=48.0% odds=49.2% gap=-1.2pp
+  LaLiga       n=2350 model=51.1% odds=51.7% gap=-0.6pp
+  eredivisie   n= 612 model=57.0% odds=56.9% gap=+0.2pp
+  Buli         n=2066 model=52.1% odds=51.9% gap=+0.2pp
+  EPL          n=1291 model=54.2% odds=54.0% gap=+0.2pp
+
+  === 模型最好的联赛 (gap最大) ===
+  primeira_liga n=1073 model=41.8% odds=44.5% gap=-2.6pp
+  Ligue2       n= 685 model=45.7% odds=47.0% gap=-1.3pp
+  EFL          n=1104 model=48.0% odds=49.2% gap=-1.2pp
+  LaLiga       n=2350 model=51.1% odds=51.7% gap=-0.6pp
+  eredivisie   n= 612 model=57.0% odds=56.9% gap=+0.2pp
+  Buli         n=2066 model=52.1% odds=51.9% gap=+0.2pp
+  EPL          n=1291 model=54.2% odds=54.0% gap=+0.2pp
+  SerieA       n=1178 model=54.1% odds=53.7% gap=+0.3pp
+  Ligue1       n= 985 model=53.5% odds=52.8% gap=+0.7pp
+  SerieB       n= 759 model=45.1% odds=44.1% gap=+0.9pp

@@ -31,7 +31,7 @@
         </select>
         <select v-model="selectedLeague" class="selector league-select">
           <option v-for="league in filteredLeagues" :key="league.league_id" :value="league.league_id">
-            {{ league.name_cn || league.name }}
+            {{ league.name_cn || league.name_en }}
           </option>
         </select>
         <select v-model="selectedSeason" class="selector season-select">
@@ -150,14 +150,14 @@ export default {
       const region = REGIONS.find(r => r.key === selectedRegion.value)
       if (!region) return leagues.value
 
-      return leagues.value.filter(l => {
+            return leagues.value.filter(l => {
         const matchRegion = region.countries.includes(l.country)
         if (selectedType.value === 'cup') {
-          return matchRegion && (l.league_type === 'cup' || l.league_type === 'international')
+          return matchRegion && (l.competition_type === 'cup' || l.competition_type === 'international' || l.competition_type === 'continental_cup' || l.competition_type === 'domestic_cup')
         } else {
-          return matchRegion && l.league_type !== 'cup' && l.league_type !== 'international'
+          return matchRegion && l.competition_type === 'league'
         }
-      })
+      }).sort((a, b) => (a.tier || 99) - (b.tier || 99))
     })
 
     // 加载联赛列表
@@ -266,6 +266,8 @@ export default {
   gap: 16px;
   min-height: 100%;
   overflow-y: auto;
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
 .card {

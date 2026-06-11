@@ -379,6 +379,10 @@
                 <div class="summary-value">{{ detectionResult.missing_dates }}</div>
                 <div class="summary-label">比赛缺失日期</div>
               </div>
+              <div class="summary-item">
+                <div class="summary-value">{{ detectionResult.missing_times || 0 }}</div>
+                <div class="summary-label">比赛缺失开球时间</div>
+              </div>
               <div class="summary-item" :class="{ warning: detectionResult.missing_league_rules > 0 }">
                 <div class="summary-value">{{ detectionResult.missing_league_rules }}</div>
                 <div class="summary-label">联赛缺失规则配置</div>
@@ -419,75 +423,65 @@
 
         <!-- 数据同步 -->
         <div v-if="activeTab === 'sync'" class="tab-content">
+          <!-- 数据缺口报告 -->
           <div class="sync-section">
-            <h3>外部数据源配置</h3>
-            <div class="data-sources">
-              <div class="source-card" v-for="source in dataSources" :key="source.id">
-                <div class="source-header">
-                  <div class="source-icon" :class="source.status">
-                    <CloudIcon />
+            <div class="section-header">
+              <h3 class="section-title">数据缺口报告</h3>
+              <button class="btn btn-small btn-primary" @click="loadGapReport" :disabled="loadingGaps">
+                <RefreshIcon class="btn-icon" :class="{ spin: loadingGaps }" />
+                <span>刷新</span>
+              </button>
+            </div>
+            <div v-if="gapReport" class="gap-grid">
+              <div class="gap-card" v-for="gap in gapItems" :key="gap.key" :class="{ warning: gap.count > 0 }">
+                <div class="gap-value">{{ gap.count }}</div>
+                <div class="gap-label">{{ gap.label }}</div>
+              </div>
+            </div>
+            <div v-else class="empty-state">
+              <ScanIcon class="empty-icon" />
+              <p>点击刷新加载数据缺口</p>
+            </div>
+          </div>
+
+          <!-- 自动同步管道 -->
+          <div class="sync-section">
+            <h3>自动同步管道</h3>
+            <div class="sync-pipelines-grid">
+              <div class="pipeline-card" v-for="pipe in syncPipelines" :key="pipe.key">
+                <div class="pipeline-header">
+                  <div class="pipeline-icon" :class="pipe.color">
+                    <component :is="pipe.icon" />
                   </div>
-                  <div class="source-info">
-                    <div class="source-name">{{ source.name }}</div>
-                    <div class="source-status" :class="source.status">
-                      {{ source.status === 'connected' ? '已连接' : source.status === 'error' ? '连接失败' : '未配置' }}
-                    </div>
+                  <div class="pipeline-info">
+                    <h4>{{ pipe.name }}</h4>
+                    <p>{{ pipe.desc }}</p>
                   </div>
                 </div>
-                <div class="source-desc">{{ source.description }}</div>
-                <div class="source-actions">
-                  <button class="btn btn-small" @click="testSource(source)">测试连接</button>
-                  <button class="btn btn-small btn-primary" @click="syncFromSource(source)" :disabled="source.syncing">
-                    {{ source.syncing ? '同步中...' : '同步数据' }}
-                  </button>
+                <div class="pipeline-status" v-if="pipeStatuses[pipe.key]">
+                  <span :class="['status-badge', pipeStatuses[pipe.key]]">
+                    {{ pipeStatuses[pipe.key] === 'completed' ? '已完成' : pipeStatuses[pipe.key] === 'failed' ? '失败' : '运行中' }}
+                  </span>
                 </div>
+                <button class="btn btn-primary btn-small" @click="runSyncPipe(pipe)" :disabled="syncing">
+                  <RefreshIcon class="btn-icon" :class="{ spin: syncing && currentSyncPipe === pipe.key }" />
+                  <span>{{ syncing && currentSyncPipe === pipe.key ? '同步中' : '执行' }}</span>
+                </button>
               </div>
             </div>
           </div>
 
+          <!-- 一键全量同步 -->
           <div class="sync-section">
-            <h3>批量数据同步</h3>
-            <div class="sync-options">
-              <div class="sync-option">
-                <div class="option-info">
-                  <h4>同步近期比赛结果</h4>
-                  <p>从外部数据源同步最近7天内已结束比赛的结果</p>
-                </div>
-                <button class="btn btn-primary" @click="syncRecentResults" :disabled="syncing">
-                  <RefreshIcon class="btn-icon" :class="{ spin: syncing }" />
-                  <span>同步</span>
-                </button>
+            <div class="full-sync-row">
+              <div class="full-sync-info">
+                <h3>一键全量同步</h3>
+                <p>依次执行所有7个同步管道，完整补充缺失数据</p>
               </div>
-              <div class="sync-option">
-                <div class="option-info">
-                  <h4>同步未来赛程</h4>
-                  <p>从外部数据源同步未来3-6个月的比赛安排</p>
-                </div>
-                <button class="btn btn-primary" @click="syncUpcomingFixtures" :disabled="syncing">
-                  <RefreshIcon class="btn-icon" :class="{ spin: syncing }" />
-                  <span>同步</span>
-                </button>
-              </div>
-              <div class="sync-option">
-                <div class="option-info">
-                  <h4>同步球队信息</h4>
-                  <p>从外部数据源同步球队基本信息和中文名称</p>
-                </div>
-                <button class="btn btn-primary" @click="syncTeams" :disabled="syncing">
-                  <RefreshIcon class="btn-icon" :class="{ spin: syncing }" />
-                  <span>同步</span>
-                </button>
-              </div>
-              <div class="sync-option">
-                <div class="option-info">
-                  <h4>同步联赛规则</h4>
-                  <p>更新各联赛的赛制规则配置</p>
-                </div>
-                <button class="btn btn-primary" @click="syncLeagueRules" :disabled="syncing">
-                  <RefreshIcon class="btn-icon" :class="{ spin: syncing }" />
-                  <span>同步</span>
-                </button>
-              </div>
+              <button class="btn btn-primary" @click="runFullSync" :disabled="syncing">
+                <RefreshIcon class="btn-icon" :class="{ spin: syncing && currentSyncPipe === 'full' }" />
+                <span>{{ syncing && currentSyncPipe === 'full' ? '全量同步中...' : '开始全量同步' }}</span>
+              </button>
             </div>
           </div>
 
@@ -515,6 +509,7 @@
 <script>
 import { ref, computed, onMounted, h, defineComponent } from 'vue'
 import axios from 'axios'
+import { syncAPI } from '../api'
 
 // 图标组件
 const createIcon = (paths) => defineComponent({
@@ -731,30 +726,36 @@ export default {
 
     // 数据同步
     const syncing = ref(false)
+    const currentSyncPipe = ref(null)
     const syncLogs = ref([])
-    const dataSources = ref([
-      {
-        id: 'thesportsdb',
-        name: 'TheSportsDB',
-        description: '免费体育数据库，提供比赛、球队、联赛信息',
-        status: 'connected',
-        syncing: false
-      },
-      {
-        id: 'football-data',
-        name: 'Football-Data.org',
-        description: '欧洲足球数据API，提供详细的比赛和积分榜数据',
-        status: 'unconfigured',
-        syncing: false
-      },
-      {
-        id: 'api-futebol',
-        name: 'API-Futebol',
-        description: '巴西和南美足球数据',
-        status: 'unconfigured',
-        syncing: false
-      }
-    ])
+    const gapReport = ref(null)
+    const loadingGaps = ref(false)
+    const pipeStatuses = ref({})
+
+    const syncPipelines = [
+      { key: 'country_cn', name: '国家中文名', desc: '从linkage文件同步国家中文名', icon: DatabaseIcon, color: 'blue' },
+      { key: 'league_rules', name: '联赛规则', desc: '自动推断联赛赛制规则', icon: TrophyIcon, color: 'green' },
+      { key: 'fix_season_ids', name: '赛季关联', desc: '修复比赛season_id关联', icon: CalendarIcon, color: 'cyan' },
+      { key: 'team_cn_api', name: '球队中文名(API)', desc: 'Sportmonks/TheSportsDB获取', icon: UsersIcon, color: 'teal' },
+      { key: 'league_cn_api', name: '联赛中文名(API)', desc: 'Sportmonks/TheSportsDB获取', icon: ActivityIcon, color: 'orange' },
+      { key: 'player_cn', name: '球员中文名(AI)', desc: 'DeepSeek AI翻译球员名', icon: UsersIcon, color: 'purple' },
+      { key: 'league_cn', name: '联赛中文名(AI)', desc: 'DeepSeek AI翻译联赛名', icon: ActivityIcon, color: 'pink' },
+      { key: 'match_results', name: '比赛结果', desc: 'API-Football同步比赛比分', icon: ActivityIcon, color: 'red' },
+      { key: 'future_matches', name: '未来赛程', desc: 'DataSourceManager同步赛程', icon: CalendarIcon, color: 'indigo' }
+    ]
+
+    const gapItems = computed(() => {
+      if (!gapReport.value) return []
+      const g = gapReport.value
+      return [
+        { key: 'team_cn', label: '球队缺中文名', count: g.missing_team_cn || 0 },
+        { key: 'player_cn', label: '球员缺中文名', count: g.missing_player_cn || 0 },
+        { key: 'league_cn', label: '联赛缺中文名', count: g.missing_league_cn || 0 },
+        { key: 'country_cn', label: '国家缺中文名', count: g.missing_country_cn || 0 },
+        { key: 'league_rules', label: '联赛缺规则', count: g.missing_league_rules || 0 },
+        { key: 'match_scores', label: '比赛缺比分', count: g.missing_match_scores || 0 }
+      ]
+    })
 
     // 计算属性
     const matchTotalPages = computed(() => Math.ceil(matches.value.length / matchPageSize.value))
@@ -935,7 +936,7 @@ export default {
       try {
         const response = await axios.get(`/api/v1/leagues/${leagueId}/detect-missing`)
         if (response.data.success) {
-          showNotification(`检测完成：缺失比分${response.data.missing_scores}场，缺失日期${response.data.missing_dates}场`, 'success')
+          showNotification(`检测完成：缺失比分${response.data.missing_scores}场，缺失日期${response.data.missing_dates}场，缺失开球时间${response.data.missing_times || 0}场`, 'success')
           // 刷新赛季数据
           loadLeagueSeasons(leagueId)
         }
@@ -1014,7 +1015,7 @@ export default {
       // 加载联赛列表用于筛选
       try {
         const leaguesRes = await axios.get('/api/v1/leagues')
-        leaguesList.value = leaguesRes.data.leagues || []
+        leaguesList.value = leaguesRes.data.data || leaguesRes.data.leagues || []
       } catch (error) {
         console.error('加载联赛列表失败:', error)
       }
@@ -1071,7 +1072,7 @@ export default {
           m.match_date,
           m.league_name,
           m.home_team_cn || m.home_team,
-          m.status === 'finished' ? `${m.home_score}-${m.away_score}` : '',
+          m.status === 'finished' ? `${m.home_goals}-${m.away_goals}` : '',
           m.away_team_cn || m.away_team,
           m.status === 'finished' ? '已结束' : '未开始'
         ].join(','))
@@ -1096,23 +1097,8 @@ export default {
         showNotification('检测完成', 'success')
       } catch (error) {
         console.error('检测失败:', error)
-        // 模拟检测结果
-        detectionResult.value = {
-          missing_team_cn: 156,
-          missing_scores: 23,
-          missing_dates: 5,
-          missing_league_rules: 8,
-          details: {
-            missing_cn_teams: [
-              { team_id: 1, name_en: 'FC Utrecht', country: 'Netherlands' },
-              { team_id: 2, name_en: 'SC Heerenveen', country: 'Netherlands' }
-            ],
-            missing_score_matches: [
-              { match_id: 1, match_date: '2024-05-15', home_team: 'Arsenal', away_team: 'Chelsea' }
-            ]
-          }
-        }
-        showNotification('检测完成（模拟数据）', 'success')
+        detectionResult.value = null
+        showNotification('检测失败: ' + (error.response?.data?.detail || error.message), 'error')
       } finally {
         detecting.value = false
       }
@@ -1120,188 +1106,128 @@ export default {
 
     const fixTeamName = async (team) => {
       showNotification(`正在补充 ${team.name_en} 的中文名...`, 'info')
-      // 调用API补充数据
+      try {
+        const response = await axios.post('/api/v1/data-fix/team-name', {
+          team_id: team.team_id,
+          name_en: team.name_en
+        })
+        if (response.data.success) {
+          showNotification(`已补充 ${team.name_en} 中文名: ${response.data.name_cn}`, 'success')
+          // 重新检测
+          runDetection()
+        } else {
+          showNotification(response.data.error || '补充失败', 'error')
+        }
+      } catch (error) {
+        showNotification('补充失败: ' + error.message, 'error')
+      }
     }
 
     const fixMatchScore = async (match) => {
       showNotification(`正在补充比赛比分...`, 'info')
-      // 调用API补充数据
-    }
-
-    const testSource = async (source) => {
-      showNotification(`测试 ${source.name} 连接...`, 'info')
       try {
-        // 测试同步状态API
-        const response = await axios.get('/api/v1/sync/status')
-        source.status = 'connected'
-        showNotification(`${source.name} 连接成功`, 'success')
-      } catch (error) {
-        source.status = 'error'
-        showNotification(`${source.name} 连接失败`, 'error')
-      }
-    }
-
-    const syncFromSource = async (source) => {
-      source.syncing = true
-      syncLogs.value.unshift({
-        id: Date.now(),
-        time: new Date().toLocaleTimeString(),
-        message: `开始从 ${source.name} 同步数据...`,
-        type: 'info'
-      })
-
-      try {
-        // 调用实际的同步API
-        if (source.id === 'thesportsdb') {
-          const response = await axios.post('/api/v1/sync/start')
-          const result = response.data
-          syncLogs.value.unshift({
-            id: Date.now(),
-            time: new Date().toLocaleTimeString(),
-            message: `${source.name} 同步完成：${result.finished_matches?.updated || 0} 场已结束比赛，${result.future_matches?.updated || 0} 场未来赛程`,
-            type: 'success'
-          })
-        } else if (source.id === 'football-data') {
-          const response = await axios.post('/api/v1/sync/finished', null, { params: { days: 7 } })
-          syncLogs.value.unshift({
-            id: Date.now(),
-            time: new Date().toLocaleTimeString(),
-            message: `${source.name} 同步完成：${response.data.updated || 0} 场比赛已更新`,
-            type: 'success'
-          })
-        } else if (source.id === 'api-futebol') {
-          const response = await axios.post('/api/v1/sync/upcoming', null, { params: { months: 3 } })
-          syncLogs.value.unshift({
-            id: Date.now(),
-            time: new Date().toLocaleTimeString(),
-            message: `${source.name} 同步完成：${response.data.updated || 0} 场赛程已更新`,
-            type: 'success'
-          })
+        const response = await axios.post('/api/v1/data-fix/match-score', {
+          match_id: match.match_id,
+          home_team: match.home_team,
+          away_team: match.away_team,
+          match_date: match.match_date
+        })
+        if (response.data.success) {
+          showNotification(`已补充比分: ${response.data.home_goals} - ${response.data.away_goals}`, 'success')
+          // 重新检测
+          runDetection()
+        } else {
+          showNotification(response.data.error || '未找到比分数据', 'error')
         }
-        showNotification(`${source.name} 同步完成`, 'success')
       } catch (error) {
-        syncLogs.value.unshift({
-          id: Date.now(),
-          time: new Date().toLocaleTimeString(),
-          message: `${source.name} 同步失败: ${error.message}`,
-          type: 'error'
-        })
-        showNotification(`${source.name} 同步失败`, 'error')
-      } finally {
-        source.syncing = false
+        showNotification('补充失败: ' + error.message, 'error')
       }
     }
 
-    const syncRecentResults = async () => {
-      syncing.value = true
-      syncLogs.value.unshift({
-        id: Date.now(),
-        time: new Date().toLocaleTimeString(),
-        message: '开始同步近期比赛结果...',
-        type: 'info'
-      })
+    // 新的同步管道方法
+    const addSyncLog = (message, type = 'info') => {
+      syncLogs.value.unshift({ id: Date.now(), time: new Date().toLocaleTimeString(), message, type })
+    }
+
+    const loadGapReport = async () => {
+      loadingGaps.value = true
       try {
-        const response = await axios.post('/api/v1/sync/finished', null, { params: { days: 7 } })
-        const result = response.data
-        syncLogs.value.unshift({
-          id: Date.now(),
-          time: new Date().toLocaleTimeString(),
-          message: `近期比赛结果同步完成：检查 ${result.checked || 0} 场，更新 ${result.updated || 0} 场`,
-          type: 'success'
-        })
-        showNotification(`近期比赛结果同步完成：更新 ${result.updated || 0} 场`, 'success')
-      } catch (error) {
-        syncLogs.value.unshift({
-          id: Date.now(),
-          time: new Date().toLocaleTimeString(),
-          message: `同步失败: ${error.message}`,
-          type: 'error'
-        })
-        showNotification('同步失败: ' + error.message, 'error')
+        const res = await syncAPI.getGapReport()
+        if (res.success && res.gaps) {
+          gapReport.value = res.gaps
+        }
+      } catch (e) {
+        addSyncLog(`缺口报告加载失败: ${e.message}`, 'error')
       } finally {
-        syncing.value = false
+        loadingGaps.value = false
       }
     }
 
-    const syncUpcomingFixtures = async () => {
-      syncing.value = true
-      syncLogs.value.unshift({
-        id: Date.now(),
-        time: new Date().toLocaleTimeString(),
-        message: '开始同步未来赛程...',
-        type: 'info'
-      })
-      try {
-        const response = await axios.post('/api/v1/sync/upcoming', null, { params: { months: 3 } })
-        const result = response.data
-        syncLogs.value.unshift({
-          id: Date.now(),
-          time: new Date().toLocaleTimeString(),
-          message: `未来赛程同步完成：更新 ${result.updated || 0} 场赛程`,
-          type: 'success'
-        })
-        showNotification(`未来赛程同步完成：更新 ${result.updated || 0} 场`, 'success')
-      } catch (error) {
-        syncLogs.value.unshift({
-          id: Date.now(),
-          time: new Date().toLocaleTimeString(),
-          message: `同步失败: ${error.message}`,
-          type: 'error'
-        })
-        showNotification('同步失败: ' + error.message, 'error')
-      } finally {
-        syncing.value = false
-      }
-    }
-
-    const syncTeams = async () => {
-      syncing.value = true
-      showNotification('正在同步球队信息...', 'info')
-      try {
-        // 调用球队更新API
-        const response = await axios.get('/api/v1/teams', { params: { limit: 500 } })
-        const teams = response.data.teams || []
-        showNotification(`已加载 ${teams.length} 个球队信息`, 'success')
-        syncLogs.value.unshift({
-          id: Date.now(),
-          time: new Date().toLocaleTimeString(),
-          message: `球队信息同步完成，共 ${teams.length} 个球队`,
-          type: 'success'
-        })
-      } catch (error) {
-        showNotification('同步失败: ' + error.message, 'error')
-      } finally {
-        syncing.value = false
-      }
-    }
-
-    const syncLeagueRules = async () => {
-      syncing.value = true
-      showNotification('正在同步联赛规则...', 'info')
-      try {
-        // 获取所有联赛并同步规则
-        const leaguesRes = await axios.get('/api/v1/leagues')
-        const leagues = leaguesRes.data.leagues || []
-        let successCount = 0
-        for (const league of leagues.slice(0, 20)) { // 只同步前20个联赛
-          try {
-            await axios.get(`/api/v1/leagues/${league.league_id}/rules`)
-            successCount++
-          } catch (e) {
-            // 忽略单个联赛的错误
+    const pollSyncProgress = async (taskName) => {
+      const poll = async () => {
+        try {
+          const res = await syncAPI.getProgress(taskName)
+          pipeStatuses.value[taskName] = res.status
+          if (res.status === 'completed' || res.status === 'failed') {
+            if (res.status === 'completed') {
+              addSyncLog(`${taskName} 完成`, 'success')
+              showNotification(`${taskName} 同步完成`, 'success')
+            } else {
+              addSyncLog(`${taskName} 失败: ${res.error || ''}`, 'error')
+              showNotification(`${taskName} 同步失败`, 'error')
+            }
+            syncing.value = false
+            currentSyncPipe.value = null
+            loadGapReport()
+            return
           }
+        } catch (e) { /* ignore */ }
+        setTimeout(poll, 2000)
+      }
+      setTimeout(poll, 1500)
+    }
+
+    const runSyncPipe = async (pipe) => {
+      syncing.value = true
+      currentSyncPipe.value = pipe.key
+      addSyncLog(`开始 ${pipe.name}...`)
+      try {
+        const apiMap = {
+          country_cn: syncAPI.syncCountryCN,
+          league_rules: syncAPI.syncLeagueRules,
+          fix_season_ids: syncAPI.fixSeasonIds,
+          team_cn_api: () => syncAPI.syncTeamCNApi(500),
+          league_cn_api: () => syncAPI.syncLeagueCNApi(200),
+          player_cn: () => syncAPI.syncPlayerCN(200),
+          league_cn: () => syncAPI.syncLeagueCN(200),
+          match_results: syncAPI.syncFinished,
+          future_matches: syncAPI.syncUpcoming
         }
-        showNotification(`联赛规则同步完成，成功 ${successCount} 个`, 'success')
-        syncLogs.value.unshift({
-          id: Date.now(),
-          time: new Date().toLocaleTimeString(),
-          message: `联赛规则同步完成，成功 ${successCount} 个联赛`,
-          type: 'success'
-        })
-      } catch (error) {
-        showNotification('同步失败: ' + error.message, 'error')
-      } finally {
+        const fn = apiMap[pipe.key]
+        if (fn) {
+          await fn()
+          pollSyncProgress(pipe.key)
+        }
+      } catch (e) {
         syncing.value = false
+        currentSyncPipe.value = null
+        addSyncLog(`${pipe.name} 启动失败: ${e.message}`, 'error')
+        showNotification(`${pipe.name} 启动失败`, 'error')
+      }
+    }
+
+    const runFullSync = async () => {
+      syncing.value = true
+      currentSyncPipe.value = 'full'
+      addSyncLog('开始全量同步...')
+      try {
+        await syncAPI.fullSync()
+        pollSyncProgress('full_sync')
+      } catch (e) {
+        syncing.value = false
+        currentSyncPipe.value = null
+        addSyncLog(`全量同步启动失败: ${e.message}`, 'error')
+        showNotification('全量同步启动失败', 'error')
       }
     }
 
@@ -1334,8 +1260,13 @@ export default {
       detecting,
       detectionResult,
       syncing,
+      currentSyncPipe,
       syncLogs,
-      dataSources,
+      gapReport,
+      loadingGaps,
+      pipeStatuses,
+      syncPipelines,
+      gapItems,
       searchLeague,
       selectedLeague,
       expandedRegions,
@@ -1362,12 +1293,9 @@ export default {
       runDetection,
       fixTeamName,
       fixMatchScore,
-      testSource,
-      syncFromSource,
-      syncRecentResults,
-      syncUpcomingFixtures,
-      syncTeams,
-      syncLeagueRules
+      loadGapReport,
+      runSyncPipe,
+      runFullSync
     }
   }
 }
@@ -2449,104 +2377,138 @@ export default {
   margin-bottom: 16px;
 }
 
-.data-sources {
+/* 缺口报告 */
+.gap-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
 }
 
-.source-card {
+.gap-card {
   background: #0d1117;
   border: 1px solid #1f2937;
   border-radius: 8px;
   padding: 16px;
+  text-align: center;
 }
 
-.source-header {
+.gap-card.warning {
+  border-color: #f59e0b;
+  background: rgba(245, 158, 11, 0.05);
+}
+
+.gap-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: white;
+}
+
+.gap-card.warning .gap-value {
+  color: #f59e0b;
+}
+
+.gap-label {
+  font-size: 12px;
+  color: #6b7280;
+  margin-top: 4px;
+}
+
+/* 同步管道网格 */
+.sync-pipelines-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.pipeline-card {
+  background: #0d1117;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.pipeline-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: 10px;
+  margin-bottom: 8px;
 }
 
-.source-icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
+.pipeline-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(59, 130, 246, 0.1);
-  color: #3b82f6;
-}
-
-.source-icon.connected {
   background: rgba(16, 185, 129, 0.1);
   color: #10b981;
+  flex-shrink: 0;
 }
 
-.source-icon.error {
-  background: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
-}
+.pipeline-icon.blue { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
+.pipeline-icon.green { background: rgba(16, 185, 129, 0.1); color: #10b981; }
+.pipeline-icon.purple { background: rgba(139, 92, 246, 0.1); color: #8b5cf6; }
+.pipeline-icon.orange { background: rgba(245, 158, 11, 0.1); color: #f59e0b; }
+.pipeline-icon.cyan { background: rgba(6, 182, 212, 0.1); color: #06b6d4; }
+.pipeline-icon.red { background: rgba(239, 68, 68, 0.1); color: #ef4444; }
+.pipeline-icon.teal { background: rgba(20, 184, 166, 0.1); color: #14b8a6; }
+.pipeline-icon.pink { background: rgba(236, 72, 153, 0.1); color: #ec4899; }
+.pipeline-icon.indigo { background: rgba(99, 102, 241, 0.1); color: #6366f1; }
 
-.source-name {
+.pipeline-info h4 {
+  font-size: 13px;
   font-weight: 600;
   color: white;
+  margin: 0 0 2px 0;
 }
 
-.source-status {
-  font-size: 12px;
+.pipeline-info p {
+  font-size: 11px;
   color: #6b7280;
+  margin: 0;
 }
 
-.source-status.connected {
+.pipeline-status {
+  margin-bottom: 8px;
+}
+
+.status-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+
+.status-badge.completed {
+  background: rgba(16, 185, 129, 0.15);
   color: #10b981;
 }
 
-.source-status.error {
+.status-badge.failed {
+  background: rgba(239, 68, 68, 0.15);
   color: #ef4444;
 }
 
-.source-desc {
-  font-size: 13px;
-  color: #6b7280;
-  margin-bottom: 12px;
-}
-
-.source-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.sync-options {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.sync-option {
+/* 全量同步 */
+.full-sync-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 16px;
-  background: #0d1117;
-  border: 1px solid #1f2937;
-  border-radius: 8px;
+  gap: 16px;
 }
 
-.option-info h4 {
-  font-size: 14px;
-  font-weight: 600;
-  color: white;
+.full-sync-info h3 {
   margin-bottom: 4px;
 }
 
-.option-info p {
-  font-size: 12px;
+.full-sync-info p {
+  font-size: 13px;
   color: #6b7280;
+  margin: 0;
 }
 
+/* 同步日志 */
 .sync-logs {
   max-height: 200px;
   overflow-y: auto;
@@ -2635,7 +2597,7 @@ export default {
     grid-template-columns: 1fr 1fr;
   }
 
-  .sync-option {
+  .full-sync-row {
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;

@@ -1,0 +1,52 @@
+================================================================================
+  serie_b深度分析: 为什么44.1%? draw率33%但预测0场draw
+================================================================================
+
+  总场次: 759
+
+  === 实际结果分布 ===
+    home: 292 (38.5%)
+    draw: 251 (33.1%)
+    away: 216 (28.5%)
+
+  === v3.4预测分布 ===
+    home: 471 (62.1%)
+    draw: 152 (20.0%)
+    away: 136 (17.9%)
+
+  === v3.9预测分布 ===
+    home: 562 (74.0%)
+    draw: 0 (0.0%)
+    away: 197 (26.0%)
+
+  === Draw概率分布 ===
+    v3.4 avg draw_prob: 0.3256
+    v3.9 avg draw_prob: 0.2845
+    v3.4 dt30 avg draw_prob: 0.3577
+    v3.9 dt30 avg draw_prob: 0.2877
+    v3.4 no-dt30 avg draw_prob: 0.2949
+
+  === dt30 vs 实际结果 ===
+    dt30: N=371
+      home: 126 (34.0%)
+      draw: 136 (36.7%)
+      away: 109 (29.4%)
+    no_dt30: N=388
+      home: 166 (42.8%)
+      draw: 115 (29.6%)
+      away: 107 (27.6%)
+
+  === serie_b参数实验 ===
+    boost=0.0 base=0.02 ah0=0.02 draw_reduce=0.0: acc=335/759=44.1% Brier=0.6359 draw_pred=0 prec=0% recall=0%
+    boost=0.0 base=0.01 ah0=0.02 draw_reduce=0.0: acc=335/759=44.1% Brier=0.6349 draw_pred=0 prec=0% recall=0%
+    boost=0.0 base=0.03 ah0=0.03 draw_reduce=0.0: acc=335/759=44.1% Brier=0.6371 draw_pred=0 prec=0% recall=0%
+    boost=0.01 base=0.02 ah0=0.02 draw_reduce=0.0: acc=335/759=44.1% Brier=0.6349 draw_pred=0 prec=0% recall=0%
+    boost=0.01 base=0.01 ah0=0.02 draw_reduce=0.0: acc=335/759=44.1% Brier=0.6340 draw_pred=0 prec=0% recall=0%
+    boost=0.0 base=0.0 ah0=0.0 draw_reduce=0.0: acc=335/759=44.1% Brier=0.6340 draw_pred=0 prec=0% recall=0%
+    boost=0.0 base=0.02 ah0=0.02 draw_reduce=0.01: acc=335/759=44.1% Brier=0.6374 draw_pred=0 prec=0% recall=0%
+    boost=0.0 base=0.02 ah0=0.02 draw_reduce=0.02: acc=335/759=44.1% Brier=0.6391 draw_pred=0 prec=0% recall=0%
+    boost=0.02 base=0.0 ah0=0.0 draw_reduce=0.0: acc=338/759=44.5% Brier=0.6327 draw_pred=15 prec=53% recall=3%
+
+================================================================================
+  serie_b深度分析完成
+================================================================================

@@ -16,21 +16,29 @@ from .form import FormAnalyzer
 from .home_away import HomeAwayAnalyzer
 from .motivation import MotivationAnalyzer
 from .news_factors import NewsFactorsAnalyzer
+from .rivalry import RivalryAnalyzer
+from .national_strength import NationalTeamStrengthEstimator
 
 
 class ComprehensiveAnalyzer:
     """综合预测分析器"""
 
-    # 各分析维度的权重配置
-    ANALYSIS_WEIGHTS = {
-        'elo': 0.20,           # Elo评分
-        'poisson': 0.25,       # Poisson预测（核心）
-        'h2h': 0.10,           # 交锋记录
-        'form': 0.15,          # 近期状态
-        'home_away': 0.10,     # 主客场优势
-        'motivation': 0.10,    # 动机分析
-        'news_factors': 0.10   # 利好利空
+    # 各赛事类型的权重配置(硬编码默认值，model_weights表优先)
+    WEIGHT_PROFILES = {
+        'league':          {'elo': 0.25, 'poisson': 0.25, 'adjusted': 0.50},
+        'cup':             {'elo': 0.20, 'poisson': 0.20, 'adjusted': 0.60},
+        'super_cup':       {'elo': 0.25, 'poisson': 0.20, 'adjusted': 0.55},
+        'playoff':         {'elo': 0.20, 'poisson': 0.20, 'adjusted': 0.60},
+        'wc_qualifier':    {'elo': 0.20, 'poisson': 0.20, 'adjusted': 0.60},
+        'nations_league':  {'elo': 0.20, 'poisson': 0.20, 'adjusted': 0.60},
+        'friendly_intl':   {'elo': 0.15, 'poisson': 0.15, 'adjusted': 0.70},
+        'tournament_intl': {'elo': 0.25, 'poisson': 0.25, 'adjusted': 0.50},
     }
+    DEFAULT_WEIGHTS = {'elo': 0.20, 'poisson': 0.25, 'adjusted': 0.55}
+
+    # model_weights缓存(避免每场预测都查DB)
+    _model_weights_cache = None
+    _model_weights_cache_time = None
 
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -44,6 +52,8 @@ class ComprehensiveAnalyzer:
         self.home_away = HomeAwayAnalyzer(db_path)
         self.motivation = MotivationAnalyzer(db_path)
         self.news_factors = NewsFactorsAnalyzer(db_path)
+        self.rivalry = RivalryAnalyzer(db_path)
+        self.national_strength = NationalTeamStrengthEstimator()
 
     def get_connection(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.db_path)
@@ -57,44 +67,169 @@ class ComprehensiveAnalyzer:
         league_id: int = None,
         season_id: int = None,
         match_date: str = None,
-        conn: sqlite3.Connection = None
+        conn: sqlite3.Connection = None,
+        match_profile=None,
     ) -> Dict:
         """
         综合预测比赛结果
 
-        整合所有分析维度，生成最终预测
+        match_profile: 可选的MatchProfile对象(来自CompetitionRuleEngine)
+        如果提供，将按分线(俱乐部/国家队)选择实力评估方式和特殊修正
         """
         if conn is None:
             conn = self.get_connection()
 
-        # 1. Elo预测
-        elo_prediction = self.elo.calculate_match_elo_prediction(home_team_id, away_team_id, conn)
+        # 1. 实力预测 — 分线选择评估方式
+        # 国家队线: FIFA排名优先 → Elo补充
+        # 俱乐部线: Elo(原有逻辑)
+        is_national = (
+            match_profile is not None
+            and hasattr(match_profile, 'is_national')
+            and match_profile.is_national
+        )
+
+        if is_national:
+            try:
+                strength_result = self.national_strength.estimate(
+                    home_team_id, away_team_id, conn
+                )
+                # 统一为elo_prediction格式(后续代码复用)
+                elo_prediction = {
+                    'home_elo': strength_result.get('home_elo', 1500),
+                    'away_elo': strength_result.get('away_elo', 1500),
+                    'elo_diff': strength_result.get('elo_diff', 0),
+                    'home_elo_adjusted': strength_result.get('home_elo', 1500),
+                    'predictions': strength_result['probabilities'],
+                    'strength_method': strength_result.get('method', 'fifa'),
+                }
+            except Exception as e:
+                elo_prediction = {
+                    'home_elo': 1500, 'away_elo': 1500, 'elo_diff': 0,
+                    'home_elo_adjusted': 1500,
+                    'predictions': {'home_win': 0.33, 'draw': 0.33, 'away_win': 0.33},
+                    'strength_method': 'unknown',
+                }
+        else:
+            try:
+                elo_prediction = self.elo.calculate_match_elo_prediction(home_team_id, away_team_id, conn)
+                elo_prediction['strength_method'] = 'elo'
+            except Exception as e:
+                elo_prediction = {
+                    'home_elo': 1500, 'away_elo': 1500, 'elo_diff': 0,
+                    'home_elo_adjusted': 1500,
+                    'predictions': {'home_win': 0.33, 'draw': 0.33, 'away_win': 0.33},
+                    'strength_method': 'unknown',
+                }
 
         # 2. Poisson预测（作为基础预测）
-        poisson_prediction = self.poisson.predict_match(home_team_id, away_team_id, conn=conn)
+        try:
+            poisson_prediction = self.poisson.predict_match(home_team_id, away_team_id, conn=conn)
+        except Exception as e:
+            poisson_prediction = {'probabilities': {'home_win': 0.33, 'draw': 0.33, 'away_win': 0.33}, 'home_xg': 1.3, 'away_xg': 1.1, 'expected_score': {'home': 1.3, 'away': 1.1}, 'most_likely_scores': [{'score': '1-1', 'probability': 10}], 'over_under_2_5': {'probability': 0.48}, 'both_teams_to_score': {'probability': 0.5}}
 
         # 3. xG分析
-        xg_analysis = self.xg.calculate_simple_xg(home_team_id, away_team_id, conn=conn)
+        try:
+            xg_analysis = self.xg.calculate_simple_xg(home_team_id, away_team_id, conn=conn)
+        except Exception as e:
+            xg_analysis = {'home_xg': 1.3, 'away_xg': 1.1}
 
         # 4. 交锋记录分析
-        h2h_analysis = self.h2h.analyze_h2h(home_team_id, away_team_id, conn=conn)
+        try:
+            h2h_analysis = self.h2h.analyze_h2h(home_team_id, away_team_id, conn=conn)
+        except Exception as e:
+            h2h_analysis = {'total_matches': 0, 'overall_record': {'team1_wins': 0, 'draws': 0, 'team2_wins': 0}, 'psychological_advantage': {'description': '无交锋记录', 'advantage': 'none', 'score': 0}, 'matches': []}
 
-        # 5. 近期状态分析
-        form_comparison = self.form.compare_teams_form(home_team_id, away_team_id, conn=conn)
+        # 5. 近期状态分析（返回三个时段的数据）
+        # 用对手强度加权版本替代普通form
+        form_comparison = {}
+        try:
+            for period, n in [('last6', 6), ('last10', 10), ('last20', 20)]:
+                try:
+                    period_form = self.form.compare_teams_form(home_team_id, away_team_id, recent_matches=n, conn=conn)
+                    # 追加对手强度加权版
+                    home_weighted = self.form.analyze_form_with_opponent_strength(home_team_id, recent_matches=n, conn=conn)
+                    away_weighted = self.form.analyze_form_with_opponent_strength(away_team_id, recent_matches=n, conn=conn)
+                    if home_weighted.get('opponent_strength_weighted'):
+                        period_form['team1_form']['form_score_raw'] = period_form['team1_form'].get('form_score', 0)
+                        period_form['team1_form']['form_score'] = home_weighted.get('form_score', period_form['team1_form'].get('form_score', 0))
+                        period_form['team1_form']['form_score_adjusted'] = home_weighted.get('form_score_adjusted')
+                    if away_weighted.get('opponent_strength_weighted'):
+                        period_form['team2_form']['form_score_raw'] = period_form['team2_form'].get('form_score', 0)
+                        period_form['team2_form']['form_score'] = away_weighted.get('form_score', period_form['team2_form'].get('form_score', 0))
+                        period_form['team2_form']['form_score_adjusted'] = away_weighted.get('form_score_adjusted')
+                except Exception:
+                    period_form = self.form.compare_teams_form(home_team_id, away_team_id, recent_matches=n, conn=conn)
+                form_comparison[period] = period_form
+        except Exception as e:
+            form_comparison = {
+                'last6': {'team1_form': {'form_score': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_for': 0, 'goals_against': 0, 'matches': 0}, 'team2_form': {'form_score': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_for': 0, 'goals_against': 0, 'matches': 0}, 'comparison': {'description': '数据不足', 'level': 'neutral', 'advantage': 'balanced'}},
+                'last10': {'team1_form': {'form_score': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_for': 0, 'goals_against': 0, 'matches': 0}, 'team2_form': {'form_score': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_for': 0, 'goals_against': 0, 'matches': 0}, 'comparison': {'description': '数据不足', 'level': 'neutral', 'advantage': 'balanced'}},
+                'last20': {'team1_form': {'form_score': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_for': 0, 'goals_against': 0, 'matches': 0}, 'team2_form': {'form_score': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_for': 0, 'goals_against': 0, 'matches': 0}, 'comparison': {'description': '数据不足', 'level': 'neutral', 'advantage': 'balanced'}}
+            }
 
-        # 6. 主客场优势分析
-        home_away_analysis = self.home_away.analyze_home_away_performance(home_team_id, conn=conn)
-        away_home_away_analysis = self.home_away.analyze_home_away_performance(away_team_id, conn=conn)
+        # 6. 主客场优势分析（返回三个时段的数据）
+        home_away_analysis = {}
+        try:
+            for period, n in [('last6', 6), ('last10', 10), ('last20', 20)]:
+                home_perf = self.home_away.analyze_home_away_performance(home_team_id, recent_matches=n, conn=conn)
+                away_perf = self.home_away.analyze_home_away_performance(away_team_id, recent_matches=n, conn=conn)
+                home_away_analysis[period] = {
+                    'home_team': home_perf,
+                    'away_team': away_perf
+                }
+        except Exception as e:
+            home_away_analysis = {
+                'last6': {'home_team': {'home': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'away': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'home_advantage': {'level': 'unknown', 'score': 50}}, 'away_team': {'home': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'away': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'home_advantage': {'level': 'unknown', 'score': 50}}},
+                'last10': {'home_team': {'home': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'away': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'home_advantage': {'level': 'unknown', 'score': 50}}, 'away_team': {'home': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'away': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'home_advantage': {'level': 'unknown', 'score': 50}}},
+                'last20': {'home_team': {'home': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'away': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'home_advantage': {'level': 'unknown', 'score': 50}}, 'away_team': {'home': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'away': {'matches': 0, 'wins': 0, 'draws': 0, 'losses': 0, 'goals_scored': 0, 'goals_conceded': 0}, 'home_advantage': {'level': 'unknown', 'score': 50}}}
+            }
 
-        # 7. 动机分析（需要league_id和season_id）
+        # 7. 动机分析
         motivation_comparison = None
         if league_id and season_id:
-            motivation_comparison = self.motivation.compare_teams_motivation(
-                home_team_id, away_team_id, league_id, season_id, conn
-            )
+            try:
+                motivation_comparison = self.motivation.compare_teams_motivation(
+                    home_team_id, away_team_id, league_id, season_id, conn
+                )
+            except Exception:
+                pass
+        else:
+            # 无积分榜 → 简化动机评估(国家队/友谊赛)
+            try:
+                motivation_comparison = self.motivation.analyze_motivation_simplified(
+                    home_team_id, away_team_id,
+                    match_date=match_date,
+                    match_profile=match_profile,
+                    conn=conn
+                )
+            except Exception:
+                pass
 
         # 8. 利好利空分析
-        factors_comparison = self.news_factors.compare_teams_factors(home_team_id, away_team_id, conn=conn)
+        try:
+            factors_comparison = self.news_factors.compare_teams_factors(home_team_id, away_team_id, conn=conn)
+        except Exception as e:
+            factors_comparison = {'home_factors': {'net_impact': 0}, 'away_factors': {'net_impact': 0}, 'comparison': {'description': '数据不足'}}
+
+        # 9. 敌对关系分析
+        rivalry_analysis = None
+        try:
+            # 获取球队名称
+            cursor = conn.cursor()
+            cursor.execute("SELECT name_en, name_cn FROM teams WHERE team_id = ?", (home_team_id,))
+            home_team_data = cursor.fetchone()
+            cursor.execute("SELECT name_en, name_cn FROM teams WHERE team_id = ?", (away_team_id,))
+            away_team_data = cursor.fetchone()
+
+            if home_team_data and away_team_data:
+                rivalry_analysis = self.rivalry.analyze_match_rivalry(
+                    home_team_data['name_en'],
+                    away_team_data['name_en'],
+                    home_team_data.get('name_cn'),
+                    away_team_data.get('name_cn')
+                )
+        except Exception:
+            pass
 
         # 基础预测（使用Poisson）
         base_prediction = {
@@ -110,79 +245,297 @@ class ComprehensiveAnalyzer:
         adjustments = []
 
         # H2H调整
-        h2h_adjustment = self.h2h.get_h2h_prediction_adjustment(
-            home_team_id, away_team_id, adjusted_prediction, conn
-        )
-        if h2h_adjustment['adjusted']:
-            adjusted_prediction['probabilities'] = h2h_adjustment['adjusted_prediction']
-            adjustments.append({
-                'type': 'h2h',
-                'factor': h2h_adjustment['adjustment_factor'],
-                'psychological_score': h2h_adjustment['psychological_score']
-            })
+        try:
+            h2h_adjustment = self.h2h.get_h2h_prediction_adjustment(
+                home_team_id, away_team_id, adjusted_prediction, conn
+            )
+            if h2h_adjustment['adjusted']:
+                adjusted_prediction['probabilities'] = h2h_adjustment['adjusted_prediction']
+                adjustments.append({
+                    'type': 'h2h',
+                    'factor': h2h_adjustment['adjustment_factor'],
+                    'psychological_score': h2h_adjustment['psychological_score']
+                })
+        except Exception:
+            pass
 
         # 近期状态调整
-        form_adjustment = self.form.get_form_prediction_adjustment(
-            home_team_id, away_team_id, adjusted_prediction, conn
-        )
-        if form_adjustment['adjusted']:
-            adjusted_prediction['probabilities'] = form_adjustment['adjusted_prediction']
-            adjustments.append({
-                'type': 'form',
-                'factor': form_adjustment['adjustment_factor'],
-                'form_comparison': form_adjustment['form_comparison']
-            })
+        try:
+            form_adjustment = self.form.get_form_prediction_adjustment(
+                home_team_id, away_team_id, adjusted_prediction, conn
+            )
+            if form_adjustment['adjusted']:
+                adjusted_prediction['probabilities'] = form_adjustment['adjusted_prediction']
+                adjustments.append({
+                    'type': 'form',
+                    'factor': form_adjustment['adjustment_factor'],
+                    'form_comparison': form_adjustment['form_comparison']
+                })
+        except Exception:
+            pass
 
         # 主客场优势调整
-        home_away_adjustment = self.home_away.get_home_advantage_adjustment(
-            home_team_id, away_team_id, adjusted_prediction, conn
-        )
-        if home_away_adjustment['adjusted']:
-            adjusted_prediction['probabilities'] = home_away_adjustment['adjusted_prediction']
-            adjustments.append({
-                'type': 'home_away',
-                'factor': home_away_adjustment['adjustment']['total'],
-                'home_advantage': home_away_adjustment['home_team_home_advantage']
-            })
+        try:
+            home_away_adjustment = self.home_away.get_home_advantage_adjustment(
+                home_team_id, away_team_id, adjusted_prediction, conn
+            )
+            if home_away_adjustment['adjusted']:
+                adjusted_prediction['probabilities'] = home_away_adjustment['adjusted_prediction']
+                adjustments.append({
+                    'type': 'home_away',
+                    'factor': home_away_adjustment['adjustment']['total'],
+                    'home_advantage': home_away_adjustment['home_team_home_advantage']
+                })
+        except Exception:
+            pass
 
         # 动机调整
         if motivation_comparison:
-            motivation_adjustment = self.motivation.get_motivation_adjustment(
-                home_team_id, away_team_id, league_id, season_id, adjusted_prediction, conn
-            )
-            if motivation_adjustment['adjusted']:
-                adjusted_prediction['probabilities'] = motivation_adjustment['adjusted_prediction']
-                adjustments.append({
-                    'type': 'motivation',
-                    'factor': motivation_adjustment['adjustment_factor'],
-                    'motivation_comparison': motivation_adjustment['motivation_comparison']
-                })
+            try:
+                if league_id and season_id:
+                    # 联赛动机 → 使用完整调整
+                    motivation_adjustment = self.motivation.get_motivation_adjustment(
+                        home_team_id, away_team_id, league_id, season_id, adjusted_prediction, conn
+                    )
+                    if motivation_adjustment['adjusted']:
+                        adjusted_prediction['probabilities'] = motivation_adjustment['adjusted_prediction']
+                        adjustments.append({
+                            'type': 'motivation',
+                            'factor': motivation_adjustment['adjustment_factor'],
+                            'motivation_comparison': motivation_adjustment['motivation_comparison']
+                        })
+                else:
+                    # 简化动机 → 直接用urgency_diff调整
+                    comp = motivation_comparison.get('comparison', {})
+                    urgency_diff = comp.get('urgency_difference', 0)
+                    if abs(urgency_diff) >= 10:
+                        adj = urgency_diff / 500
+                        probs = adjusted_prediction['probabilities']
+                        if urgency_diff > 0:
+                            probs['home_win'] += adj
+                            probs['away_win'] -= adj * 0.5
+                        else:
+                            probs['away_win'] += abs(adj)
+                            probs['home_win'] -= abs(adj) * 0.5
+                        total = sum(probs.values())
+                        for k in probs:
+                            probs[k] /= total
+                        adjustments.append({
+                            'type': 'motivation_simplified',
+                            'urgency_diff': urgency_diff,
+                            'advantage': comp.get('advantage'),
+                        })
+            except Exception:
+                pass
 
         # 利好利空调整
-        factors_adjustment = self.news_factors.get_factors_adjustment(
-            home_team_id, away_team_id, adjusted_prediction, conn=conn
-        )
-        if factors_adjustment['adjusted']:
-            adjusted_prediction['probabilities'] = factors_adjustment['adjusted_prediction']
-            adjustments.append({
-                'type': 'news_factors',
-                'factor': factors_adjustment['adjustment_factor'],
-                'factors_comparison': factors_adjustment['factors_comparison']
-            })
+        try:
+            factors_adjustment = self.news_factors.get_factors_adjustment(
+                home_team_id, away_team_id, adjusted_prediction, conn=conn
+            )
+            if factors_adjustment['adjusted']:
+                adjusted_prediction['probabilities'] = factors_adjustment['adjusted_prediction']
+                adjustments.append({
+                    'type': 'news_factors',
+                    'factor': factors_adjustment['adjustment_factor'],
+                    'factors_comparison': factors_adjustment['factors_comparison']
+                })
+        except Exception:
+            pass
 
         # 计算最终预测（加权融合）
+        weights = self._get_weights(match_profile)
         final_prediction = self._calculate_final_prediction(
-            elo_prediction, poisson_prediction, adjusted_prediction
+            elo_prediction, poisson_prediction, adjusted_prediction, weights
         )
 
+        # ── 赔率异动修正(从intel环节) ──
+        odds_movement_signals = self._load_odds_movement(home_team_id, away_team_id, match_date, conn)
+        if odds_movement_signals:
+            probs = final_prediction['probabilities']
+            for sig in odds_movement_signals:
+                outcome = sig['outcome']
+                magnitude = sig['magnitude']
+                direction = sig['direction']
+                # 赔率异动 → 市场信号, 向异动方向微调
+                # market moving toward X → 增加X的概率
+                if direction == 'up':
+                    probs[outcome] += magnitude * 0.3
+                else:
+                    probs[outcome] -= magnitude * 0.3
+                total = sum(probs.values())
+                for k in probs:
+                    probs[k] /= total
+            adjustments.append({
+                'type': 'odds_movement',
+                'signals': odds_movement_signals,
+            })
+
+        # ── MatchProfile驱动的特殊修正 ──
+        pre_match_intel = None
+
+        if match_profile is not None:
+            # 1) 平局增幅
+            if match_profile.draw_boost != 0:
+                probs = final_prediction['probabilities']
+                probs['draw'] += match_profile.draw_boost
+                probs['draw'] = max(0.05, min(0.60, probs['draw']))
+                total = sum(probs.values())
+                for k in probs:
+                    probs[k] /= total
+
+            # 2) 中立场削弱主场优势
+            if match_profile.is_neutral_venue:
+                probs = final_prediction['probabilities']
+                home_redist = probs['home_win'] * 0.05
+                probs['home_win'] -= home_redist
+                probs['draw'] += home_redist * 0.4
+                probs['away_win'] += home_redist * 0.6
+                total = sum(probs.values())
+                for k in probs:
+                    probs[k] /= total
+
+            # 3) 友谊赛5维度修正(仅FRIENDLY_INTL类型)
+            if match_profile.competition_type.value == 'friendly_intl':
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT name_en FROM teams WHERE team_id = ?", (home_team_id,))
+                    home_row = cursor.fetchone()
+                    cursor.execute("SELECT name_en FROM teams WHERE team_id = ?", (away_team_id,))
+                    away_row = cursor.fetchone()
+                    if home_row and away_row:
+                        probs = final_prediction['probabilities']
+                        implied_odds = {
+                            'home': round(1 / max(0.01, probs['home_win']), 2),
+                            'draw': round(1 / max(0.01, probs['draw']), 2),
+                            'away': round(1 / max(0.01, probs['away_win']), 2),
+                        }
+                        pre_match_intel = self._apply_friendly_intel(
+                            home_row['name_en'], away_row['name_en'],
+                            match_profile.league_name, match_date or '',
+                            final_prediction, implied_odds
+                        )
+                except Exception:
+                    pass
+
+        else:
+            # 兼容旧调用: 无match_profile时保留原逻辑
+            if league_id and match_date:
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT name_en FROM leagues WHERE league_id = ?", (league_id,))
+                    league_row = cursor.fetchone()
+                    if league_row and league_row['name_en'] and league_row['name_en'].lower() in ('friendly', 'friendlies', 'international'):
+                        cursor.execute("SELECT name_en FROM teams WHERE team_id = ?", (home_team_id,))
+                        home_row = cursor.fetchone()
+                        cursor.execute("SELECT name_en FROM teams WHERE team_id = ?", (away_team_id,))
+                        away_row = cursor.fetchone()
+                        if home_row and away_row:
+                            probs = final_prediction['probabilities']
+                            implied_odds = None
+                            try:
+                                implied_odds = {
+                                    'home': round(1/max(0.01, probs['home_win']), 2),
+                                    'draw': round(1/max(0.01, probs['draw']), 2),
+                                    'away': round(1/max(0.01, probs['away_win']), 2),
+                                }
+                            except:
+                                pass
+                            pre_match_intel = self._apply_friendly_intel(
+                                home_row['name_en'], away_row['name_en'],
+                                league_row['name_en'], match_date,
+                                final_prediction, implied_odds
+                            )
+                except Exception:
+                    pass
+
+        # ── 杯赛/友谊赛轮换修正 ──
+        rotation_adjustment = None
+        if match_profile and match_profile.competition_type.value in ('cup', 'friendly_intl', 'super_cup'):
+            try:
+                rotation_adjustment = self._apply_rotation_adjustment(
+                    home_team_id, away_team_id, match_profile, match_date,
+                    final_prediction, conn
+                )
+                if rotation_adjustment and rotation_adjustment.get('adjusted'):
+                    adjustments.append({
+                        'type': 'rotation',
+                        'home_rotation': rotation_adjustment.get('home_rotation'),
+                        'away_rotation': rotation_adjustment.get('away_rotation'),
+                    })
+            except Exception:
+                pass
+
         # 生成预测报告
+        weights = self._get_weights(match_profile)
         report = self._generate_prediction_report(
             home_team_id, away_team_id,
             elo_prediction, poisson_prediction, xg_analysis,
             h2h_analysis, form_comparison, home_away_analysis,
             motivation_comparison, factors_comparison,
-            adjustments, final_prediction
+            adjustments, final_prediction, weights
         )
+
+        # 赔率基线(纯赔率概率, 用于对比)
+        odds_baseline = None
+        odds_source = None
+        try:
+            cursor = conn.cursor()
+            # Try SPF first, then RQSPF as fallback
+            for play_type in ['spf', 'rqspf']:
+                cursor.execute("""
+                    SELECT lo.odds_data, lo.play_type
+                    FROM lottery_odds lo
+                    JOIN lottery_matches lm ON lo.lottery_match_id = lm.lottery_match_id
+                    WHERE lm.home_team_id = ? AND lm.away_team_id = ? AND lm.match_date = ?
+                    AND lo.play_type = ?
+                    ORDER BY lo.created_at DESC LIMIT 1
+                """, (home_team_id, away_team_id, match_date, play_type))
+                odds_row = cursor.fetchone()
+                if odds_row and odds_row[0]:
+                    import json as _json
+                    odds_data = _json.loads(odds_row[0]) if isinstance(odds_row[0], str) else odds_row[0]
+                    h = float(odds_data.get('3', odds_data.get('spf_home', odds_data.get('home', 0))))
+                    d = float(odds_data.get('1', odds_data.get('spf_draw', odds_data.get('draw', 0))))
+                    a = float(odds_data.get('0', odds_data.get('spf_away', odds_data.get('away', 0))))
+                    if h > 1 and d > 1 and a > 1:
+                        total_i = 1/h + 1/d + 1/a
+                        odds_baseline = {
+                            'home_win': round((1/h)/total_i, 4),
+                            'draw': round((1/d)/total_i, 4),
+                            'away_win': round((1/a)/total_i, 4),
+                        }
+                        odds_source = play_type
+                        break
+        except Exception:
+            pass
+
+        # 模型 vs 赔率对比
+        model_vs_odds = None
+        if odds_baseline:
+            probs = final_prediction['probabilities']
+            model_rec = max(probs, key=probs.get)
+            odds_rec = max(odds_baseline, key=odds_baseline.get)
+            model_vs_odds = {
+                'model_rec': model_rec,
+                'odds_rec': odds_rec,
+                'agreement': model_rec == odds_rec,
+                'source': odds_source or 'unknown',
+            }
+
+        # 因子分解
+        w = weights or self.DEFAULT_WEIGHTS
+        factor_breakdown = {
+            'strength': {
+                'method': elo_prediction.get('strength_method', 'elo'),
+                'prob': elo_prediction['predictions'],
+                'weight': w.get('elo', 0.20),
+            },
+            'poisson': {
+                'prob': poisson_prediction['probabilities'],
+                'weight': w.get('poisson', 0.25),
+            },
+        }
 
         return {
             'home_team_id': home_team_id,
@@ -198,25 +551,229 @@ class ComprehensiveAnalyzer:
             'xg_analysis': xg_analysis,
             'h2h_analysis': h2h_analysis,
             'form_comparison': form_comparison,
-            'home_away_analysis': {
-                'home_team': home_away_analysis,
-                'away_team': away_home_away_analysis
-            },
+            'home_away_analysis': home_away_analysis,
             'motivation_analysis': motivation_comparison,
             'news_factors_analysis': factors_comparison,
+            'rivalry_analysis': rivalry_analysis,
             'adjustments': adjustments,
+            'odds_baseline': odds_baseline,
+            'model_vs_odds': model_vs_odds,
+            'factor_breakdown': factor_breakdown,
+            'weight_source': weights.get('_source', 'hardcoded') if weights else 'hardcoded',
+            'weights_used': {k: v for k, v in (weights or {}).items() if not k.startswith('_')},
+            'match_profile': match_profile.to_dict() if match_profile else None,
             'report': report
+        }
+
+    def _get_weights(self, match_profile=None) -> Dict:
+        """根据MatchProfile获取融合权重 — model_weights表优先，WEIGHT_PROFILES兜底"""
+        # 尝试从model_weights表读取(缓存5分钟)
+        db_weights = self._load_model_weights()
+        if db_weights:
+            # model_weights存7个因子: elo, poisson, h2h, form, home_away, motivation, news_factors
+            # 映射到3键: elo, poisson, adjusted(=h2h+form+home_away+motivation+news_factors)
+            elo_w = db_weights.get('elo', 0.20)
+            poisson_w = db_weights.get('poisson', 0.25)
+            adjusted_w = (
+                db_weights.get('h2h', 0.10) +
+                db_weights.get('form', 0.15) +
+                db_weights.get('home_away', 0.10) +
+                db_weights.get('motivation', 0.10) +
+                db_weights.get('news_factors', 0.10)
+            )
+            # 归一化
+            total = elo_w + poisson_w + adjusted_w
+            if total > 0:
+                return {
+                    'elo': round(elo_w / total, 4),
+                    'poisson': round(poisson_w / total, 4),
+                    'adjusted': round(adjusted_w / total, 4),
+                    '_source': 'model_weights',
+                }
+
+        # 兜底: WEIGHT_PROFILES
+        if match_profile is not None and hasattr(match_profile, 'competition_type'):
+            ct = match_profile.competition_type.value
+            return self.WEIGHT_PROFILES.get(ct, self.DEFAULT_WEIGHTS).copy()
+        return self.DEFAULT_WEIGHTS.copy()
+
+    def _load_model_weights(self) -> Dict:
+        """从model_weights表加载活跃权重(5分钟缓存)"""
+        import time
+        now = time.time()
+        if self._model_weights_cache and self._model_weights_cache_time and (now - self._model_weights_cache_time) < 300:
+            return self._model_weights_cache
+
+        try:
+            conn = sqlite3.connect(self.db_path, timeout=10)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM model_weights WHERE is_active = 1 LIMIT 1")
+            row = cursor.fetchone()
+            conn.close()
+
+            if row:
+                self._model_weights_cache = {
+                    'elo': row['elo_weight'],
+                    'poisson': row['poisson_weight'],
+                    'h2h': row['h2h_weight'],
+                    'form': row['form_weight'],
+                    'home_away': row['home_away_weight'],
+                    'motivation': row['motivation_weight'],
+                    'news_factors': row['news_factors_weight'],
+                }
+                self._model_weights_cache_time = now
+                return self._model_weights_cache
+        except Exception:
+            pass
+
+        return {}
+
+    def _load_odds_movement(self, home_team_id, away_team_id, match_date, conn) -> list:
+        """从intel报告加载该比赛的赔率异动信号"""
+        try:
+            cursor = conn.cursor()
+            # 找该日期的intel报告
+            report_id = f"intel_{match_date}"
+            cursor.execute("""
+                SELECT report_data FROM lottery_analysis_reports
+                WHERE lottery_match_id = ? AND report_type = 'intel'
+                ORDER BY created_at DESC LIMIT 1
+            """, (report_id,))
+            row = cursor.fetchone()
+            if not row:
+                return []
+            import json as _json
+            intel_data = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            movements = intel_data.get('odds_movements', [])
+            if not movements:
+                return []
+            # 过滤出与本场相关的异动
+            cursor.execute("""
+                SELECT lottery_match_id FROM lottery_matches
+                WHERE home_team_id = ? AND away_team_id = ? AND match_date = ?
+                LIMIT 1
+            """, (home_team_id, away_team_id, match_date))
+            match_row = cursor.fetchone()
+            if not match_row:
+                return []
+            lm_id = match_row['lottery_match_id']
+            return [m for m in movements if m.get('lottery_match_id') == lm_id]
+        except Exception:
+            return []
+
+    def _apply_rotation_adjustment(
+        self, home_team_id, away_team_id, match_profile, match_date,
+        final_prediction, conn
+    ) -> Optional[Dict]:
+        """杯赛/友谊赛轮换修正
+
+        轮换 → 实力打折 → 弱队概率上升
+        轮换概率由赛事类型+赛程密度+联赛排名安全度决定
+        """
+        cursor = conn.cursor()
+
+        def _get_rotation_prob(team_id):
+            """估算单队轮换概率"""
+            # 基础轮换概率(赛事类型决定)
+            ct = match_profile.competition_type.value
+            if ct == 'friendly_intl':
+                base_rot = 0.55
+            elif ct == 'cup':
+                base_rot = 0.30
+            elif ct == 'super_cup':
+                base_rot = 0.10
+            else:
+                base_rot = 0.15
+
+            # 赛程密度修正: 近7天比赛数
+            density = 0
+            if match_date:
+                try:
+                    cursor.execute("""
+                        SELECT COUNT(*) as cnt FROM matches
+                        WHERE (home_team_id = ? OR away_team_id = ?)
+                        AND match_date > date(?, '-7 days')
+                        AND match_date < ?
+                        AND status = 'finished'
+                    """, (team_id, team_id, match_date, match_date))
+                    row = cursor.fetchone()
+                    density = int(row['cnt']) if row else 0
+                except Exception:
+                    pass
+
+            if density >= 3:
+                base_rot += 0.15  # 密集赛程更可能轮换
+            elif density >= 2:
+                base_rot += 0.05
+
+            # 联赛排名安全度修正(仅联赛球队有积分榜)
+            # 安全 → 更可能轮换; 保级 → 不轮换
+            try:
+                cursor.execute("""
+                    SELECT s.position, s.points,
+                           (SELECT COUNT(*) FROM standings s2
+                            WHERE s2.league_id = s.league_id
+                            AND s2.season_id = s.season_id) as total_teams
+                    FROM standings s
+                    WHERE s.team_id = ?
+                    ORDER BY s.updated_at DESC LIMIT 1
+                """, (team_id,))
+                standing = cursor.fetchone()
+                if standing and standing['total_teams'] > 0:
+                    pos = standing['position'] or 0
+                    total = standing['total_teams']
+                    # 排名前30% → 安全 → 轮换+
+                    if pos > 0 and pos <= total * 0.3:
+                        base_rot += 0.10
+                    # 排名后30% → 保级 → 轮换-
+                    elif pos > total * 0.7:
+                        base_rot -= 0.15
+            except Exception:
+                pass
+
+            return max(0.0, min(0.80, base_rot))
+
+        home_rot = _get_rotation_prob(home_team_id)
+        away_rot = _get_rotation_prob(away_team_id)
+
+        # 轮换差异 → 概率调整
+        # 轮换多的队实力打折, 对手概率上升
+        rot_diff = away_rot - home_rot  # 正值=客队轮换更多→利好主队
+        probs = final_prediction['probabilities']
+
+        if abs(rot_diff) < 0.05:
+            return {'adjusted': False, 'home_rotation': home_rot, 'away_rotation': away_rot}
+
+        # 轮换差异转概率调整: 每差0.1 → 调整0.02
+        adj = rot_diff * 0.2
+        probs['home_win'] += adj
+        probs['away_win'] -= adj
+        total = sum(probs.values())
+        for k in probs:
+            probs[k] /= total
+
+        return {
+            'adjusted': True,
+            'home_rotation': round(home_rot, 2),
+            'away_rotation': round(away_rot, 2),
+            'rotation_diff': round(rot_diff, 2),
+            'adjustment': round(adj, 4),
         }
 
     def _calculate_final_prediction(
         self,
         elo_prediction: Dict,
         poisson_prediction: Dict,
-        adjusted_prediction: Dict
+        adjusted_prediction: Dict,
+        weights: Dict = None
     ) -> Dict:
         """
         计算最终预测（加权融合）
         """
+        if weights is None:
+            weights = self.DEFAULT_WEIGHTS
+
         # Elo预测概率
         elo_probs = elo_prediction['predictions']
 
@@ -226,14 +783,9 @@ class ComprehensiveAnalyzer:
         # 调整后预测概率
         adjusted_probs = adjusted_prediction['probabilities']
 
-        # 加权融合
-        # Poisson权重最高，作为基础
-        # Elo作为补充
-        # 调整后的预测作为最终修正
-
-        elo_weight = self.ANALYSIS_WEIGHTS['elo']
-        poisson_weight = self.ANALYSIS_WEIGHTS['poisson']
-        adjusted_weight = 1 - elo_weight - poisson_weight
+        elo_weight = weights.get('elo', 0.20)
+        poisson_weight = weights.get('poisson', 0.25)
+        adjusted_weight = weights.get('adjusted', 1 - elo_weight - poisson_weight)
 
         final_home_win = (
             elo_probs['home_win'] * elo_weight +
@@ -252,6 +804,11 @@ class ComprehensiveAnalyzer:
             poisson_probs['away_win'] * poisson_weight +
             adjusted_probs['away_win'] * adjusted_weight
         )
+
+        # 裁剪到合法范围(防止负概率)
+        final_home_win = max(0.01, final_home_win)
+        final_draw = max(0.01, final_draw)
+        final_away_win = max(0.01, final_away_win)
 
         # 标准化
         total = final_home_win + final_draw + final_away_win
@@ -296,6 +853,57 @@ class ComprehensiveAnalyzer:
             'both_teams_to_score': poisson_prediction['both_teams_to_score']
         }
 
+    def _apply_friendly_intel(self, home_team, away_team, league, date, final_prediction, odds=None) -> Optional[dict]:
+        """友谊赛赛前情报修正"""
+        try:
+            from fetchers.pre_match import PreMatchCollector
+            collector = PreMatchCollector()
+            report = collector.collect(home_team, away_team, date, league, odds=odds)
+
+            adj = report.friendly_adjustment
+            if adj.get('friendly_type') == 'not_friendly':
+                return None
+
+            probs = final_prediction['probabilities']
+            adjusted = {
+                'home_win': probs['home_win'] + adj.get('home_win_adj', 0),
+                'draw': probs['draw'] + adj.get('draw_adj', 0),
+                'away_win': probs['away_win'] + adj.get('away_win_adj', 0),
+            }
+
+            for k in adjusted:
+                adjusted[k] = max(0.01, min(0.97, adjusted[k]))
+
+            total = sum(adjusted.values())
+            for k in adjusted:
+                adjusted[k] /= total
+
+            final_prediction['probabilities'] = adjusted
+            final_prediction['pre_match_intel'] = {
+                'key_insights': report.key_insights,
+                'friendly_type': adj.get('friendly_type', ''),
+                'home_advantage_net': report.context.home_advantage_net if report.context else 0,
+            }
+
+            # 更新预测结果
+            if adjusted['home_win'] > adjusted['away_win'] and adjusted['home_win'] > adjusted['draw']:
+                final_prediction['predicted_result'] = 'home_win'
+                final_prediction['confidence'] = adjusted['home_win']
+            elif adjusted['away_win'] > adjusted['home_win'] and adjusted['away_win'] > adjusted['draw']:
+                final_prediction['predicted_result'] = 'away_win'
+                final_prediction['confidence'] = adjusted['away_win']
+            else:
+                final_prediction['predicted_result'] = 'draw'
+                final_prediction['confidence'] = adjusted['draw']
+
+            return {
+                'key_insights': report.key_insights,
+                'friendly_type': adj.get('friendly_type', ''),
+                'adjusted': True,
+            }
+        except Exception:
+            return None
+
     def _generate_prediction_report(
         self,
         home_team_id: int,
@@ -309,7 +917,8 @@ class ComprehensiveAnalyzer:
         motivation_comparison: Optional[Dict],
         factors_comparison: Dict,
         adjustments: List[Dict],
-        final_prediction: Dict
+        final_prediction: Dict,
+        weights: Dict = None
     ) -> str:
         """
         生成预测报告文本
@@ -357,28 +966,38 @@ class ComprehensiveAnalyzer:
             psych = h2h_analysis['psychological_advantage']
             report_lines.append(f"  心理优势：{psych['description']}")
 
-        # 近期状态
+        # 近期状态（使用last10作为报告默认值）
         report_lines.append(f"\n近期状态：")
-        report_lines.append(f"  主队状态评分：{form_comparison['team1_form']['form_score']}")
-        report_lines.append(f"  客队状态评分：{form_comparison['team2_form']['form_score']}")
-        comparison_desc = form_comparison['comparison'].get('description')
+        form_last10 = form_comparison.get('last10', {})
+        report_lines.append(f"  主队状态评分：{form_last10.get('team1_form', {}).get('form_score', 0)}")
+        report_lines.append(f"  客队状态评分：{form_last10.get('team2_form', {}).get('form_score', 0)}")
+        comparison_desc = form_last10.get('comparison', {}).get('description')
         if comparison_desc:
             report_lines.append(f"  状态对比：{comparison_desc}")
         else:
-            level = form_comparison['comparison'].get('level', 'neutral')
-            advantage = form_comparison['comparison'].get('advantage', 'balanced')
+            level = form_last10.get('comparison', {}).get('level', 'neutral')
+            advantage = form_last10.get('comparison', {}).get('advantage', 'balanced')
             report_lines.append(f"  状态对比：{advantage}方状态更优（差距等级：{level}）")
 
-        # 主客场优势
-        home_adv = home_away_analysis['home_advantage']
+        # 主客场优势（使用last10作为报告默认值）
+        ha_last10 = home_away_analysis.get('last10', {})
+        home_team_ha = ha_last10.get('home_team', {})
+        home_adv = home_team_ha.get('home_advantage', {'level': 'unknown', 'score': 50})
         report_lines.append(f"\n主场优势：")
         report_lines.append(f"  主队主场优势：{home_adv['level']}（评分：{home_adv['score']}）")
 
         # 动机分析
         if motivation_comparison:
             report_lines.append(f"\n动机分析：")
-            report_lines.append(f"  主队动机：{motivation_comparison['home_motivation']['type']}（紧迫度：{motivation_comparison['home_motivation']['urgency']}）")
-            report_lines.append(f"  客队动机：{motivation_comparison['away_motivation']['type']}（紧迫度：{motivation_comparison['away_motivation']['urgency']}）")
+            hm = motivation_comparison.get('home_motivation', {})
+            am = motivation_comparison.get('away_motivation', {})
+            # 两种格式: standard用'type', simplified用'motivation_type'
+            hm_type = hm.get('motivation_type', hm.get('type', '?'))
+            am_type = am.get('motivation_type', am.get('type', '?'))
+            hm_urgency = hm.get('urgency', '?')
+            am_urgency = am.get('urgency', '?')
+            report_lines.append(f"  主队动机：{hm_type}（紧迫度：{hm_urgency}）")
+            report_lines.append(f"  客队动机：{am_type}（紧迫度：{am_urgency}）")
             report_lines.append(f"  动机对比：{motivation_comparison['comparison']['description']}")
 
         # 利好利空
@@ -391,7 +1010,9 @@ class ComprehensiveAnalyzer:
         if adjustments:
             report_lines.append(f"\n预测调整：")
             for adj in adjustments:
-                report_lines.append(f"  {adj['type']}：调整系数 {adj['factor']}")
+                adj_type = adj.get('type', '?')
+                adj_factor = adj.get('factor', adj.get('urgency_diff', adj.get('rotation_diff', '')))
+                report_lines.append(f"  {adj_type}：调整系数 {adj_factor}")
 
         return '\n'.join(report_lines)
 

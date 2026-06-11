@@ -1,0 +1,260 @@
+======================================================================
+  v3.8诊断: odds 2.0-3.0区间深度分析
+======================================================================
+  总比赛数: 13993
+
+  === 1. Odds子区间: 模型 vs 赔率 ===
+
+  --- odds 2.0-2.2 (n=1140) ---
+  实际分布: home=517(45.4%) draw=343(30.1%) away=280(24.6%)
+  赔率预测: home=1136 draw=0 away=4
+  模型预测: home=1118 draw=10 away=12
+  赔率argmax: 516/1140=45.3%
+  模型argmax: 509/1140=44.6%
+  差值: -0.6pp
+  模型Brier: 0.6412  赔率Brier: 0.7319  差: -0.0907
+  模型改赔率: 改对4 改错14 净-10
+
+  --- odds 2.2-2.5 (n=1560) ---
+  实际分布: home=630(40.4%) draw=470(30.1%) away=460(29.5%)
+  赔率预测: home=1480 draw=0 away=80
+  模型预测: home=1249 draw=220 away=91
+  赔率argmax: 623/1560=39.9%
+  模型argmax: 624/1560=40.0%
+  差值: +0.1pp
+  模型Brier: 0.6588  赔率Brier: 0.7491  差: -0.0903
+  模型改赔率: 改对85 改错165 净-80
+
+  --- odds 2.5-3.0 (n=1506) ---
+  实际分布: home=491(32.6%) draw=465(30.9%) away=550(36.5%)
+  赔率预测: home=643 draw=0 away=863
+  模型预测: home=334 draw=547 away=625
+  赔率argmax: 612/1506=40.6%
+  模型argmax: 581/1506=38.6%
+  差值: -2.1pp
+  模型Brier: 0.6599  赔率Brier: 0.7544  差: -0.0946
+  模型改赔率: 改对181 改错395 净-214
+
+  === 2. Signal方向对2-3区间的影响 ===
+  signal+0.03~0.1: n=451 模型=34.6% 赔率=36.8% 改对=37 改错=87 净=-50
+  signal+0.1~0.3: n=1694 模型=40.8% 赔率=41.9% 改对=69 改错=159 净=-90
+  signal-0.1~-0.03: n=197 模型=36.0% 赔率=38.6% 改对=22 改错=51 净=-29
+  signal-0.3~-0.1: n=618 模型=37.5% 赔率=38.8% 改对=73 改错=157 净=-84
+  signal<-0.3: n=228 模型=48.7% 赔率=47.4% 改对=19 改错=31 净=-12
+  signal>+0.3: n=712 模型=47.2% 赔率=46.6% 改对=12 改错=14 净=-2
+  signal~0: n=306 模型=38.2% 赔率=39.2% 改对=38 改错=75 净=-37
+
+  === 3. 场景flag在2-3区间的影响 ===
+  draw_threshold_0.3: n=1527 模型=36.7% 赔率=39.9% 改对=239 改错=535 净=-296
+  draw_threshold_0.28: n=1287 模型=42.7% 赔率=42.0% 改对=15 改错=17 净=-2
+  draw_threshold_0.26: n=977 模型=42.2% 赔率=41.8% 改对=13 改错=17 净=-4
+  fatigue: n=549 模型=39.9% 赔率=40.3% 改对=42 改错=86 净=-44
+  clv_motivation_aligned: n=130 模型=40.8% 赔率=43.8% 改对=7 改错=15 净=-8
+
+  === 4. 概率校准 (2-3区间) ===
+  --- Home Win ---
+  模型20%: n=26 实际=11.5% 差=-8.5pp
+  模型30%: n=1416 实际=32.3% 差=+2.3pp
+  模型40%: n=2383 实际=41.6% 差=+1.6pp
+  模型50%: n=378 实际=49.2% 差=-0.8pp
+
+  --- Draw ---
+  模型30%: n=2842 实际=30.2% 差=+0.2pp
+  模型40%: n=1359 实际=31.0% 差=-9.0pp
+
+  --- Away Win ---
+  模型20%: n=750 实际=23.3% 差=+3.3pp
+  模型30%: n=2768 实际=29.4% 差=-0.6pp
+  模型40%: n=673 实际=43.8% 差=+3.8pp
+  模型50%: n=15 实际=40.0% 差=-10.0pp
+
+  === 5. 模型改赔率改错的比赛 (按误差排序，top 30) ===
+  2026-01-21 Platense Municipal vs Municipal Limeno (bundesliga)
+    odds_h=2.82 score=0-1 actual=away
+    赔率→away 模型→draw
+    模型: h=38.8% d=43.7% a=17.5%
+    赔率: h=33.1% d=0.0% a=36.2%
+    signal=0.3044 flags=fatigue,draw_threshold_0.3
+  2024-02-10 Fulham vs Bournemouth (premier_league)
+    odds_h=2.40 score=3-1 actual=home
+    赔率→home 模型→away
+    模型: h=24.5% d=30.2% a=45.3%
+    赔率: h=37.6% d=0.0% a=35.0%
+    signal=-0.4054 flags=clv_motivation_aligned,draw_threshold_0.26
+  2025-05-04 Chelsea vs Liverpool (Premier League)
+    odds_h=2.24 score=3-1 actual=home
+    赔率→home 模型→away
+    模型: h=26.1% d=28.0% a=46.0%
+    赔率: h=40.7% d=0.0% a=33.5%
+    signal=-0.4621 flags=clv_motivation_aligned,fatigue
+  2026-01-17 Real Betis vs Villarreal (La Liga)
+    odds_h=2.53 score=2-0 actual=home
+    赔率→home 模型→away
+    模型: h=25.3% d=30.9% a=43.8%
+    赔率: h=37.0% d=0.0% a=35.7%
+    signal=-0.3436 flags=draw_threshold_0.26
+  2026-03-01 Torino vs Lazio (Serie A)
+    odds_h=2.81 score=2-0 actual=home
+    赔率→home 模型→draw
+    模型: h=21.9% d=40.0% a=38.1%
+    赔率: h=33.3% d=0.0% a=33.3%
+    signal=-0.1909 flags=draw_threshold_0.3
+  2024-01-13 Las Palmas vs Villarreal (la_liga)
+    odds_h=2.52 score=3-0 actual=home
+    赔率→home 模型→away
+    模型: h=27.4% d=30.5% a=42.1%
+    赔率: h=36.5% d=0.0% a=35.6%
+    signal=-0.2692 flags=draw_threshold_0.26
+  2024-11-02 Southampton vs Everton (Premier League)
+    odds_h=2.69 score=1-0 actual=home
+    赔率→home 模型→away
+    模型: h=26.2% d=33.2% a=40.5%
+    赔率: h=35.6% d=0.0% a=35.5%
+    signal=-0.2552 flags=draw_threshold_0.28
+  2024-11-09 Brentford vs Bournemouth (Premier League)
+    odds_h=2.58 score=3-2 actual=home
+    赔率→home 模型→away
+    模型: h=27.7% d=30.7% a=41.6%
+    赔率: h=37.0% d=0.0% a=36.1%
+    signal=-0.2590 flags=draw_threshold_0.26
+  2024-01-02 Valencia vs Villarreal (la_liga)
+    odds_h=2.05 score=3-1 actual=home
+    赔率→home 模型→away
+    模型: h=28.1% d=30.4% a=41.5%
+    赔率: h=43.7% d=0.0% a=28.3%
+    signal=-0.4886 flags=clv_motivation_aligned,draw_threshold_0.28
+  2023-09-23 Stade Brestois 29 vs Olympique Lyon (ligue_1)
+    odds_h=2.53 score=1-0 actual=home
+    赔率→home 模型→away
+    模型: h=27.8% d=31.2% a=41.0%
+    赔率: h=36.1% d=0.0% a=36.1%
+    signal=-0.2316 flags=draw_threshold_0.26
+  2026-01-03 Atalanta vs Roma (Serie A)
+    odds_h=2.23 score=1-0 actual=home
+    赔率→home 模型→draw
+    模型: h=26.9% d=38.7% a=34.4%
+    赔率: h=41.2% d=0.0% a=27.9%
+    signal=-0.2425 flags=draw_threshold_0.3
+  2025-11-09 Mallorca vs Getafe (La Liga)
+    odds_h=2.47 score=1-0 actual=home
+    赔率→home 模型→draw
+    模型: h=27.6% d=39.0% a=33.5%
+    赔率: h=36.8% d=0.0% a=29.4%
+    signal=-0.1540 flags=draw_threshold_0.3
+  2026-05-16 SC Freiburg vs RB Leipzig (Bundesliga)
+    odds_h=2.65 score=4-1 actual=home
+    赔率→home 模型→away
+    模型: h=30.6% d=27.6% a=41.9%
+    赔率: h=38.2% d=0.0% a=36.8%
+    signal=-0.2169 flags=
+  2025-12-21 Luis Angel Firpo vs Alianza FC (bundesliga)
+    odds_h=2.75 score=1-0 actual=home
+    赔率→home 模型→draw
+    模型: h=31.2% d=42.0% a=26.8%
+    赔率: h=33.9% d=0.0% a=29.1%
+    signal=0.0405 flags=draw_threshold_0.3
+  2024-05-05 Brighton and Hove Albion vs Aston Villa (premier_league)
+    odds_h=2.72 score=1-0 actual=home
+    赔率→home 模型→away
+    模型: h=30.5% d=28.3% a=41.1%
+    赔率: h=39.2% d=0.0% a=35.6%
+    signal=-0.2448 flags=fatigue
+  2023-12-17 Bologna vs Roma (serie_a)
+    odds_h=2.44 score=2-0 actual=home
+    赔率→home 模型→draw
+    模型: h=28.3% d=38.9% a=32.8%
+    赔率: h=38.6% d=0.0% a=28.3%
+    signal=-0.1729 flags=draw_threshold_0.3
+  2024-12-12 FAS vs Metapan (bundesliga)
+    odds_h=2.59 score=2-1 actual=home
+    赔率→home 模型→draw
+    模型: h=33.1% d=43.6% a=23.3%
+    赔率: h=36.1% d=0.0% a=25.3%
+    signal=0.0931 flags=draw_threshold_0.3
+  2026-03-04 Aston Villa vs Chelsea (Premier League)
+    odds_h=2.70 score=1-4 actual=away
+    赔率→away 模型→home
+    模型: h=39.7% d=30.8% a=29.4%
+    赔率: h=35.7% d=0.0% a=37.1%
+    signal=0.2043 flags=fatigue,draw_threshold_0.26
+  2026-01-22 Metapan vs Aguila (bundesliga)
+    odds_h=2.62 score=4-2 actual=home
+    赔率→home 模型→draw
+    模型: h=30.0% d=40.1% a=29.9%
+    赔率: h=35.6% d=0.0% a=32.4%
+    signal=-0.1169 flags=draw_threshold_0.3
+  2024-02-25 FC Augsburg vs SC Freiburg (bundesliga)
+    odds_h=2.28 score=2-1 actual=home
+    赔率→home 模型→away
+    模型: h=30.0% d=30.0% a=40.0%
+    赔率: h=40.1% d=0.0% a=33.1%
+    signal=-0.2909 flags=clv_motivation_aligned,draw_threshold_0.26
+  2025-03-02 Metapan vs Alianza FC (bundesliga)
+    odds_h=2.85 score=2-1 actual=home
+    赔率→home 模型→draw
+    模型: h=30.2% d=40.1% a=29.6%
+    赔率: h=32.8% d=0.0% a=32.1%
+    signal=0.0118 flags=fatigue,draw_threshold_0.3
+  2026-03-08 Getafe vs Real Betis (La Liga)
+    odds_h=2.80 score=2-0 actual=home
+    赔率→home 模型→draw
+    模型: h=30.4% d=39.3% a=30.2%
+    赔率: h=34.6% d=0.0% a=31.3%
+    signal=-0.1167 flags=draw_threshold_0.3
+  2025-07-20 FAS vs Metapan (bundesliga)
+    odds_h=2.81 score=1-0 actual=home
+    赔率→home 模型→draw
+    模型: h=30.7% d=39.3% a=30.0%
+    赔率: h=33.2% d=0.0% a=32.5%
+    signal=-0.0119 flags=draw_threshold_0.3
+  2024-12-08 Metapan vs Alianza FC (bundesliga)
+    odds_h=2.83 score=1-0 actual=home
+    赔率→home 模型→draw
+    模型: h=30.5% d=39.1% a=30.4%
+    赔率: h=33.0% d=0.0% a=32.9%
+    signal=0.0009 flags=fatigue,draw_threshold_0.3
+  2026-03-15 Metapan vs FAS (bundesliga)
+    odds_h=2.87 score=0-3 actual=away
+    赔率→away 模型→draw
+    模型: h=30.1% d=39.1% a=30.8%
+    赔率: h=32.6% d=0.0% a=33.4%
+    signal=-0.0069 flags=draw_threshold_0.3
+  2025-03-05 Ferrol vs Burgos (la_liga_2)
+    odds_h=2.96 score=0-1 actual=away
+    赔率→away 模型→draw
+    模型: h=30.2% d=38.8% a=30.9%
+    赔率: h=31.5% d=0.0% a=32.3%
+    signal=-0.0924 flags=draw_threshold_0.3
+  2026-01-25 FC Nantes vs OGC Nice (Ligue 1)
+    odds_h=2.88 score=1-4 actual=away
+    赔率→away 模型→home
+    模型: h=37.7% d=32.1% a=30.1%
+    赔率: h=34.9% d=0.0% a=36.9%
+    signal=0.1675 flags=clv_motivation_aligned,draw_threshold_0.28
+  2024-01-07 Torino vs Napoli (serie_a)
+    odds_h=2.96 score=3-0 actual=home
+    赔率→home 模型→draw
+    模型: h=30.8% d=38.0% a=31.2%
+    赔率: h=36.2% d=0.0% a=33.0%
+    signal=-0.1402 flags=draw_threshold_0.3
+  2026-04-25 Parma vs Pisa (serie_a)
+    odds_h=2.05 score=1-0 actual=home
+    赔率→home 模型→draw
+    模型: h=29.8% d=37.0% a=33.2%
+    赔率: h=42.6% d=0.0% a=26.2%
+    signal=-0.2288 flags=clv_motivation_aligned,draw_threshold_0.3
+  2026-04-25 West Ham United vs Everton (Premier League)
+    odds_h=2.46 score=2-1 actual=home
+    赔率→home 模型→away
+    模型: h=31.2% d=30.4% a=38.4%
+    赔率: h=38.9% d=0.0% a=33.3%
+    signal=-0.2154 flags=draw_threshold_0.26
+
+  === 6. 改错pattern ===
+  模型→draw(赔率→H/A): 290场
+  模型→away 赔率→home: 14场
+  模型→home 赔率→away: 3场
+
+======================================================================
+  诊断完成
+======================================================================

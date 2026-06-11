@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>体彩API测试</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #1a1a2e; color: #fff; }
+    .match-card { background: #16213e; border-radius: 8px; padding: 15px; margin: 10px 0; }
+    .team { font-size: 16px; font-weight: bold; }
+    .league { color: #10b981; font-size: 14px; }
+    .time { color: #9ca3af; font-size: 12px; }
+    h1 { color: #10b981; }
+    #status { padding: 10px; margin: 10px 0; border-radius: 4px; }
+    .success { background: rgba(16, 185, 129, 0.2); }
+    .error { background: rgba(239, 68, 68, 0.2); }
+  </style>
+</head>
+<body>
+  <h1>体彩API数据测试</h1>
+  <div id="status">正在加载...</div>
+  <div id="matches"></div>
+
+  <script>
+    async function loadMatches() {
+      const statusEl = document.getElementById('status');
+      const matchesEl = document.getElementById('matches');
+
+      try {
+        statusEl.textContent = '正在请求API...';
+        statusEl.className = '';
+
+        const response = await fetch('http://localhost:18888/api/v1/lottery/matches');
+        const data = await response.json();
+
+        statusEl.textContent = `成功获取 ${data.total} 场比赛`;
+        statusEl.className = 'success';
+
+        if (data.matches && data.matches.length > 0) {
+          matchesEl.innerHTML = data.matches.map(m => `
+            <div class="match-card">
+              <div class="league">${m.match_num || ''} | ${m.league_name_cn || '未知联赛'}</div>
+              <div class="team">${m.home_team_cn || '未知主队'} VS ${m.away_team_cn || '未知客队'}</div>
+              <div class="time">${m.match_date} ${m.match_time}</div>
+            </div>
+          `).join('');
+        } else {
+          matchesEl.innerHTML = '<p>没有比赛数据</p>';
+        }
+      } catch (e) {
+        statusEl.textContent = 'API请求失败: ' + e.message;
+        statusEl.className = 'error';
+        matchesEl.innerHTML = '<p>请确保后端服务运行在 localhost:18888</p>';
+      }
+    }
+
+    loadMatches();
+  </script>
+</body>
+</html>

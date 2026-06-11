@@ -8,7 +8,7 @@
             <CalendarIcon />
             赛事前瞻
           </h2>
-          <p class="subtitle">查看今日比赛安排与实时比分</p>
+          <p class="subtitle">查看未来比赛安排与实时比分</p>
         </div>
         <div class="date-nav">
           <button class="nav-btn" @click="prevDay">
@@ -19,6 +19,18 @@
             <ChevronRightIcon />
           </button>
         </div>
+      </div>
+
+      <!-- 日期快捷选择 -->
+      <div class="date-shortcuts">
+        <button
+          v-for="(shortcut, idx) in dateShortcuts"
+          :key="idx"
+          :class="['shortcut-btn', { active: selectedDays === shortcut.days }]"
+          @click="selectedDays = shortcut.days"
+        >
+          {{ shortcut.label }}
+        </button>
       </div>
 
       <!-- 筛选栏 -->
@@ -68,13 +80,46 @@
             :key="match.match_id"
             :class="['match-card', getStatusClass(match)]"
           >
-            <!-- 状态标签 -->
+            <!-- 状态和时间 -->
             <div class="match-status-row">
               <span class="status-badge" :class="getStatusClass(match)">
                 <span v-if="isLive(match)" class="pulse-dot"></span>
                 {{ getStatusText(match) }}
               </span>
-              <span class="match-time">{{ match.beijing_time || match.match_time }}</span>
+            </div>
+
+            <!-- 时间显示 -->
+            <div class="match-time-section">
+              <!-- 如果 time_type 是 beijing，显示反推的当地时间 + 北京时间 -->
+              <template v-if="match.time_type === 'beijing'">
+                <div class="time-primary">
+                  <span class="time-date" :class="{ 'date-changed': match.date_changed }">{{ match.local_date || match.match_date }}</span>
+                  <span class="time-value">{{ match.local_time || match.match_time || '--:--' }}</span>
+                  <span class="time-label">当地时间</span>
+                </div>
+                <div class="time-divider"></div>
+                <div class="time-secondary">
+                  <span class="local-date">{{ match.match_date }}</span>
+                  <span class="local-value highlight">{{ match.beijing_time || '--:--' }}</span>
+                  <span class="local-label">北京时间</span>
+                </div>
+              </template>
+              <!-- 否则显示当地时间 + 北京时间 -->
+              <template v-else>
+                <div class="time-primary">
+                  <span class="time-date">{{ match.match_date }}</span>
+                  <span class="time-value">{{ match.local_time || match.match_time || '--:--' }}</span>
+                  <span class="time-label">当地时间</span>
+                </div>
+                <div class="time-divider"></div>
+                <div class="time-secondary">
+                  <span class="local-date" :class="{ 'date-changed': match.date_changed }">
+                    {{ match.date_changed ? (match.beijing_datetime ? match.beijing_datetime.split(' ')[0] : match.match_date) : match.match_date }}
+                  </span>
+                  <span class="local-value">{{ match.beijing_time || '--:--' }}</span>
+                  <span class="local-label">北京时间</span>
+                </div>
+              </template>
             </div>
 
             <!-- 球队信息 -->
@@ -194,6 +239,99 @@
           <h4>赛前预测</h4>
           <span class="loading-text">计算中...</span>
         </div>
+
+        <!-- 因子分解 -->
+        <div class="factor-breakdown" v-if="analysisDetail?.report?.factor_breakdown?.factors && Object.keys(analysisDetail.report.factor_breakdown.factors).length">
+          <h4>因子分解</h4>
+          <div class="factor-grid">
+            <div v-for="(probs, factor) in analysisDetail.report.factor_breakdown.factors" :key="factor" class="factor-item">
+              <div class="factor-name">{{ factorLabel(factor) }}</div>
+              <div class="factor-bars">
+                <div class="mini-bar">
+                  <span class="mini-label">主</span>
+                  <div class="mini-track"><div class="mini-fill home" :style="{ width: (probs.home_win * 100) + '%' }"></div></div>
+                  <span class="mini-val">{{ (probs.home_win * 100).toFixed(0) }}%</span>
+                </div>
+                <div class="mini-bar">
+                  <span class="mini-label">平</span>
+                  <div class="mini-track"><div class="mini-fill draw" :style="{ width: (probs.draw * 100) + '%' }"></div></div>
+                  <span class="mini-val">{{ (probs.draw * 100).toFixed(0) }}%</span>
+                </div>
+                <div class="mini-bar">
+                  <span class="mini-label">客</span>
+                  <div class="mini-track"><div class="mini-fill away" :style="{ width: (probs.away_win * 100) + '%' }"></div></div>
+                  <span class="mini-val">{{ (probs.away_win * 100).toFixed(0) }}%</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Model vs Odds -->
+          <div class="model-vs-odds" v-if="analysisDetail.report.model_vs_odds">
+            <span class="mvo-label">模型vs赔率:</span>
+            <span :class="['mvo-status', analysisDetail.report.model_vs_odds.agreement ? 'agree' : 'disagree']">
+              {{ analysisDetail.report.model_vs_odds.agreement ? '方向一致' : '存在分歧' }}
+            </span>
+          </div>
+        </div>
+
+        <!-- 6项玩法预测 -->
+        <div class="play-predictions" v-if="playPredictions && Object.keys(playPredictions).length">
+          <h4>玩法预测</h4>
+
+          <!-- TOP3比分 -->
+          <div class="play-section" v-if="playPredictions.top3_scores?.length">
+            <div class="play-label">比分推荐</div>
+            <div class="score-chips">
+              <span v-for="(s, i) in playPredictions.top3_scores" :key="i"
+                    :class="['score-chip', i === 0 ? 'top1' : '']">
+                {{ s.score }} <small>{{ (s.probability * 100).toFixed(0) }}%</small>
+              </span>
+            </div>
+          </div>
+
+          <!-- 让球胜平负 -->
+          <div class="play-section" v-if="playPredictions.rqspf?.direction">
+            <div class="play-label">让球胜平负 <span class="handicap-badge" v-if="playPredictions.rqspf.handicap">让{{ playPredictions.rqspf.handicap }}</span></div>
+            <div class="spf-result" v-if="playPredictions.rqspf.direction_cn">
+              <span :class="['direction-tag', {win: playPredictions.rqspf.direction==='3', draw: playPredictions.rqspf.direction==='1', lose: playPredictions.rqspf.direction==='0'}]">{{ playPredictions.rqspf.direction_cn }}</span>
+              <span class="rqspf-probs" v-if="playPredictions.rqspf.probabilities">
+                主{{ (playPredictions.rqspf.probabilities['3'] * 100).toFixed(0) }}%
+                平{{ (playPredictions.rqspf.probabilities['1'] * 100).toFixed(0) }}%
+                客{{ (playPredictions.rqspf.probabilities['0'] * 100).toFixed(0) }}%
+              </span>
+            </div>
+          </div>
+
+          <!-- 大小球 -->
+          <div class="play-section" v-if="playPredictions.over_under?.recommendation">
+            <div class="play-label">大小球</div>
+            <div class="ou-result">
+              <span class="ou-rec">{{ playPredictions.over_under.recommendation }}</span>
+              <span class="ou-probs" v-if="playPredictions.over_under.over_2_5 !== undefined">
+                大2.5={{ (playPredictions.over_under.over_2_5 * 100).toFixed(0) }}%
+                小2.5={{ (playPredictions.over_under.under_2_5 * 100).toFixed(0) }}%
+              </span>
+            </div>
+          </div>
+
+          <!-- 半全场 -->
+          <div class="play-section" v-if="playPredictions.bqc?.recommendation_cn">
+            <div class="play-label">半全场</div>
+            <div class="bqc-result">
+              <span class="bqc-rec">{{ playPredictions.bqc.recommendation_cn }}</span>
+              <span class="bqc-probs" v-if="playPredictions.bqc.probabilities">
+                ({{ (playPredictions.bqc.probabilities[playPredictions.bqc.recommendation] * 100).toFixed(0) }}%)
+              </span>
+            </div>
+            <div class="bqc-grid" v-if="playPredictions.bqc.probabilities">
+              <div v-for="(prob, key) in playPredictions.bqc.probabilities" :key="key"
+                   :class="['bqc-cell', key === playPredictions.bqc.recommendation ? 'highlight' : '']">
+                <span class="bqc-key">{{ {hh:'胜胜',hd:'胜平',ha:'胜负',dh:'平胜',dd:'平平',da:'平负',ah:'负胜',ad:'负平',aa:'负负'}[key] }}</span>
+                <span class="bqc-val">{{ (prob * 100).toFixed(0) }}%</span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -292,8 +430,18 @@ export default {
     const selectedMatch = ref(null)
     const prediction = ref(null)
     const predictionLoading = ref(false)
+    const analysisDetail = ref(null)
+    const playPredictions = ref(null)
     const currentDate = ref(new Date())
     const activeFilter = ref('all')
+    const selectedDays = ref(2)  // 默认显示未来2天
+
+    const dateShortcuts = [
+      { label: '今天', days: 1 },
+      { label: '未来2天', days: 2 },
+      { label: '未来3天', days: 3 },
+      { label: '未来7天', days: 7 }
+    ]
 
     const filters = [
       { label: '全部比赛', value: 'all' },
@@ -308,19 +456,62 @@ export default {
     })
 
     const isLive = (match) => {
-      return match.status === 'Live' || match.status === 'Today'
+      return match.status === 'live' || match.status === 'Live' || match.status === 'Today'
     }
 
+    // 判断比赛是否已结束（以中午12点为分界线）
     const isFinished = (match) => {
-      return match.status === 'Finished'
+      // 如果状态明确是finished，直接返回true
+      const status = (match.status || '').toLowerCase()
+      if (status === 'finished' || status === 'ft') return true
+
+      // 如果有比分，说明已结束
+      if (match.home_goals !== null && match.away_goals !== null) return true
+
+      // 获取比赛时间
+      const matchDate = match.match_date || ''
+      const matchTime = match.beijing_time || match.match_time || ''
+
+      // 如果没有时间，无法判断，默认为未开始
+      if (!matchTime || matchTime === '--:--' || matchTime === '') return false
+
+      // 根据时间判断
+      const now = new Date()
+      const today12pm = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0)
+
+      // 如果当前时间还没到中午12点，则昨天12点之前的都算已结束
+      // 如果当前时间已过中午12点，则今天12点之前的都算已结束
+      const cutoffTime = now < today12pm
+        ? new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 12, 0, 0)
+        : today12pm
+
+      // 解析比赛时间
+      const matchDateTime = new Date(`${matchDate} ${matchTime}`)
+
+      return matchDateTime < cutoffTime
     }
 
+    // 判断比赛是否未开始
     const isUpcoming = (match) => {
-      return match.status === 'Scheduled' || !match.status
+      // 如果已结束或进行中，则不是未开始
+      if (isFinished(match) || isLive(match)) return false
+
+      // 获取比赛时间
+      const matchDate = match.match_date || ''
+      const matchTime = match.beijing_time || match.match_time || ''
+
+      // 如果没有时间，默认为未开始
+      if (!matchTime || matchTime === '--:--' || matchTime === '') return true
+
+      // 根据时间判断：当前时间还没到比赛开始时间
+      const now = new Date()
+      const matchDateTime = new Date(`${matchDate} ${matchTime}`)
+
+      return matchDateTime > now
     }
 
     const hasScore = (match) => {
-      return match.status === 'Finished' || match.home_goals !== null
+      return match.status === 'finished' || match.status === 'Finished' || match.home_goals !== null
     }
 
     const getFilterCount = (filter) => {
@@ -334,17 +525,41 @@ export default {
     const filteredMatches = computed(() => {
       let result = matches.value
 
-      // 按状态筛选
-      if (activeFilter.value === 'live') result = matches.value.filter(m => isLive(m))
-      else if (activeFilter.value === 'finished') result = matches.value.filter(m => isFinished(m))
-      else if (activeFilter.value === 'upcoming') result = matches.value.filter(m => isUpcoming(m))
+      // 获取当前时间和中午12点分界线
+      const now = new Date()
+      const today12pm = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12, 0, 0)
 
-      // 按时间排序
-      return result.sort((a, b) => {
-        const timeA = a.beijing_time || a.match_time || ''
-        const timeB = b.beijing_time || b.match_time || ''
-        return timeA.localeCompare(timeB)
-      })
+      // 按状态筛选
+      if (activeFilter.value === 'live') {
+        result = matches.value.filter(m => isLive(m))
+      } else if (activeFilter.value === 'finished') {
+        result = matches.value.filter(m => isFinished(m))
+        // 已结束：按时间倒序，离分界线最近的排最前
+        result.sort((a, b) => {
+          const dateA = new Date(`${a.match_date} ${a.beijing_time || a.match_time || '00:00'}`)
+          const dateB = new Date(`${b.match_date} ${b.beijing_time || b.match_time || '00:00'}`)
+          // 倒序：最近的在前
+          return dateB - dateA
+        })
+      } else if (activeFilter.value === 'upcoming') {
+        result = matches.value.filter(m => isUpcoming(m))
+        // 未开始：按时间正序，离分界线最近的排最前
+        result.sort((a, b) => {
+          const dateA = new Date(`${a.match_date} ${a.beijing_time || a.match_time || '00:00'}`)
+          const dateB = new Date(`${b.match_date} ${b.beijing_time || b.match_time || '00:00'}`)
+          // 正序：最近的在前
+          return dateA - dateB
+        })
+      } else {
+        // 全部：按时间正序
+        result.sort((a, b) => {
+          const dateA = new Date(`${a.match_date} ${a.beijing_time || a.match_time || '00:00'}`)
+          const dateB = new Date(`${b.match_date} ${b.beijing_time || b.match_time || '00:00'}`)
+          return dateA - dateB
+        })
+      }
+
+      return result
     })
 
     const groupedMatches = computed(() => {
@@ -375,10 +590,17 @@ export default {
     const loadMatches = async () => {
       loading.value = true
       try {
-        // 根据当前选择的日期加载比赛
-        const dateStr = formatDate(currentDate.value)
-        const res = await matchAPI.getByDate(dateStr)
+        // 根据当前选择的日期和天数范围加载比赛
+        const startDate = formatDate(currentDate.value)
+        const endDate = formatDate(new Date(currentDate.value.getTime() + (selectedDays.value - 1) * 24 * 60 * 60 * 1000))
+
+        // 调用API获取日期范围内的比赛
+        const res = await matchAPI.getByDateRange(startDate, endDate)
         matches.value = res.data || []
+        // 调试：打印第一条比赛数据
+        if (matches.value.length > 0) {
+          console.log('第一条比赛数据:', matches.value[0])
+        }
       } catch (e) {
         console.error('加载比赛失败:', e)
         matches.value = []
@@ -403,8 +625,28 @@ export default {
       selectedMatch.value = match
       prediction.value = null
       predictionLoading.value = true
+      analysisDetail.value = null
+      playPredictions.value = null
 
       try {
+        // Load from lottery analysis API (has factor breakdown)
+        if (match.lottery_match_id) {
+          const resp = await fetch(`/api/analysis/${match.lottery_match_id}`)
+          const data = await resp.json()
+          if (data.report && data.report.final_prediction) {
+            analysisDetail.value = data
+            prediction.value = {
+              home_win_prob: Math.round((data.report.final_prediction.probabilities?.home_win || 0) * 100),
+              draw_prob: Math.round((data.report.final_prediction.probabilities?.draw || 0) * 100),
+              away_win_prob: Math.round((data.report.final_prediction.probabilities?.away_win || 0) * 100),
+            }
+            // Load play_predictions from report
+            playPredictions.value = data.report.play_predictions || {}
+            predictionLoading.value = false
+            return
+          }
+        }
+        // Fallback: use analysisAPI
         if (match.home_team_id && match.away_team_id) {
           const res = await analysisAPI.predictMatch(match.home_team_id, match.away_team_id)
           prediction.value = res.data
@@ -424,9 +666,18 @@ export default {
 
     const getStatusText = (match) => {
       if (isFinished(match)) return '已结束'
-      if (match.status === 'Live') return '进行中'
+      if (match.status === 'live' || match.status === 'Live') return '进行中'
       if (match.status === 'Today') return '今日'
       return '未开始'
+    }
+
+    const factorLabel = (factor) => {
+      const labels = {
+        elo: 'Elo等级分', poisson: '泊松模型', h2h: '历史交锋',
+        form: '近期状态', home_away: '主客场', motivation: '战意',
+        news: '临场情报', odds: '赔率基线',
+      }
+      return labels[factor] || factor
     }
 
     const getTeamLogo = (name, id) => {
@@ -434,14 +685,16 @@ export default {
     }
 
     watch(currentDate, loadMatches)
+    watch(selectedDays, loadMatches)
 
     onMounted(loadMatches)
 
     return {
-      loading, matches, selectedMatch, prediction, predictionLoading,
+      loading, matches, selectedMatch, prediction, predictionLoading, analysisDetail, playPredictions,
       currentDate, todayDate, activeFilter, filters, filteredMatches, groupedMatches,
       prevDay, nextDay, selectMatch, getStatusClass, getStatusText, getTeamLogo,
-      isLive, isFinished, isUpcoming, hasScore, getFilterCount
+      factorLabel, isLive, isFinished, isUpcoming, hasScore, getFilterCount,
+      selectedDays, dateShortcuts
     }
   }
 }
@@ -529,6 +782,36 @@ export default {
 .current-date {
   font-size: 14px;
   color: #e5e7eb;
+  font-weight: 500;
+}
+
+/* 日期快捷选择 */
+.date-shortcuts {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.shortcut-btn {
+  padding: 6px 14px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #9ca3af;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.shortcut-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+}
+
+.shortcut-btn.active {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.5);
+  color: #10b981;
   font-weight: 500;
 }
 
@@ -712,7 +995,8 @@ export default {
 .match-status-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
+  margin-bottom: 8px;
 }
 
 .status-badge {
@@ -720,8 +1004,8 @@ export default {
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  padding: 3px 8px;
-  border-radius: 4px;
+  padding: 3px 10px;
+  border-radius: 12px;
   font-weight: 500;
 }
 
@@ -753,8 +1037,107 @@ export default {
   color: #10b981;
 }
 
-.match-time {
-  font-size: 12px;
+/* 时间显示区域 */
+.match-time-section {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  margin-bottom: 10px;
+}
+
+.time-single {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.time-single .time-date {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.time-single .time-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: #10b981;
+  letter-spacing: 1px;
+}
+
+.time-single .time-value.highlight {
+  color: #10b981;
+}
+
+.time-primary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding-right: 16px;
+}
+
+.time-date {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.time-date.date-changed {
+  color: #f59e0b;
+  font-weight: 500;
+}
+
+.time-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #e5e7eb;
+  letter-spacing: 1px;
+}
+
+.time-label {
+  font-size: 10px;
+  color: #6b7280;
+}
+
+.time-divider {
+  width: 1px;
+  height: 50px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.time-secondary {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding-left: 16px;
+}
+
+.local-date {
+  font-size: 11px;
+  color: #9ca3af;
+}
+
+.local-date.date-changed {
+  color: #f59e0b;
+  font-weight: 500;
+}
+
+.local-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #10b981;
+  letter-spacing: 1px;
+}
+
+.local-value.highlight {
+  color: #10b981;
+}
+
+.local-label {
+  font-size: 10px;
   color: #6b7280;
 }
 
@@ -1064,6 +1447,176 @@ export default {
   color: #6b7280;
   font-size: 13px;
 }
+
+/* Factor breakdown */
+.factor-breakdown {
+  padding: 16px;
+  background: #1c222f;
+  border-radius: 10px;
+  margin-top: 8px;
+}
+.factor-breakdown h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e5e7eb;
+  margin-bottom: 12px;
+}
+.factor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+.factor-item {
+  background: #0f172a;
+  border-radius: 8px;
+  padding: 10px;
+}
+.factor-name {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.factor-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mini-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.mini-label {
+  width: 16px;
+  font-size: 10px;
+  color: #64748b;
+}
+.mini-track {
+  flex: 1;
+  height: 4px;
+  background: #1e293b;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.mini-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+.mini-fill.home { background: #22d3ee; }
+.mini-fill.draw { background: #fbbf24; }
+.mini-fill.away { background: #f87171; }
+.mini-val {
+  width: 28px;
+  font-size: 10px;
+  color: #cbd5e1;
+  text-align: right;
+}
+.model-vs-odds {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid #1e293b;
+  font-size: 12px;
+}
+.mvo-label { color: #94a3b8; }
+.mvo-status { font-weight: 600; margin-left: 6px; }
+.mvo-status.agree { color: #4ade80; }
+.mvo-status.disagree { color: #fbbf24; }
+
+/* 6项玩法预测 */
+.play-predictions {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #1e293b;
+}
+.play-predictions h4 {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 10px;
+}
+.play-section {
+  margin-bottom: 10px;
+}
+.play-label {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.handicap-badge {
+  background: #374151;
+  color: #fbbf24;
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.score-chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.score-chip {
+  background: #1e293b;
+  color: #e2e8f0;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid #374151;
+}
+.score-chip.top1 {
+  background: rgba(59, 130, 246, 0.2);
+  border-color: #3b82f6;
+  color: #93c5fd;
+}
+.score-chip small {
+  font-weight: 400;
+  color: #94a3b8;
+  margin-left: 2px;
+}
+.spf-result, .ou-result, .bqc-result {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.direction-tag { font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 13px; }
+.direction-tag.win { background: rgba(74, 222, 128, 0.2); color: #4ade80; }
+.direction-tag.draw { background: rgba(251, 191, 36, 0.2); color: #fbbf24; }
+.direction-tag.lose { background: rgba(248, 113, 113, 0.2); color: #f87171; }
+.rqspf-probs, .ou-probs, .bqc-probs {
+  font-size: 11px;
+  color: #94a3b8;
+}
+.ou-rec, .bqc-rec {
+  font-weight: 700;
+  color: #93c5fd;
+}
+.bqc-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 6px;
+}
+.bqc-cell {
+  background: #1e293b;
+  border-radius: 4px;
+  padding: 3px 6px;
+  text-align: center;
+  font-size: 11px;
+  display: flex;
+  justify-content: space-between;
+}
+.bqc-cell.highlight {
+  background: rgba(59, 130, 246, 0.2);
+  border: 1px solid #3b82f6;
+}
+.bqc-key { color: #94a3b8; }
+.bqc-val { color: #e2e8f0; font-weight: 600; }
 
 @media (max-width: 600px) {
   .header-section {

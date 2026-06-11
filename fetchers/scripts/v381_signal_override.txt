@@ -1,0 +1,45 @@
+======================================================================
+  v3.8.1 signal override效果分析
+======================================================================
+
+  === 按signal方向 × flip分类 ===
+  [flip_away] n=1386 model=33.3% odds=39.0% gap=-5.7pp
+  [flip_home] n=16 model=31.2% odds=43.8% gap=-12.5pp
+  [flip_neutral] n=50 model=28.0% odds=38.0% gap=-10.0pp
+  [flip_sig0.1-0.3] n=376 model=23.1% odds=43.1% gap=-19.9pp
+  [flip_sig0.3-0.5] n=267 model=30.3% odds=40.4% gap=-10.1pp
+  [flip_sig<0.1] n=50 model=28.0% odds=38.0% gap=-10.0pp
+  [flip_sig>=0.5] n=759 model=39.3% odds=36.5% gap=+2.8pp
+  [noflip_away] n=2922 model=51.8% odds=51.8% gap=+0.0pp
+  [noflip_home] n=7763 model=55.0% odds=55.0% gap=+0.0pp
+  [noflip_neutral] n=1856 model=40.1% odds=40.1% gap=+0.0pp
+  [noflip_sig0.1-0.3] n=4231 model=45.2% odds=45.2% gap=+0.0pp
+  [noflip_sig0.3-0.5] n=3096 model=54.7% odds=54.7% gap=+0.0pp
+  [noflip_sig<0.1] n=1856 model=40.1% odds=40.1% gap=+0.0pp
+  [noflip_sig>=0.5] n=3358 model=64.8% odds=64.8% gap=+0.0pp
+
+  === flip改错模式 ===
+  home→away|away: 400
+  home→away|home: 396
+  home→away|draw: 279
+  home→draw|home: 158
+  home→draw|away: 116
+  home→draw|draw: 69
+  away→home|away: 7
+  away→home|home: 6
+  away→home|draw: 6
+  away→draw|away: 5
+  away→draw|home: 5
+  away→draw|draw: 5
+
+  === noflip改错模式 ===
+  home|home: 4867
+  home|draw: 2357
+  home|away: 2049
+  away|away: 1658
+  away|draw: 862
+  away|home: 748
+
+======================================================================
+  分析完成
+======================================================================

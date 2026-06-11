@@ -81,7 +81,7 @@
             <div class="fixtures-list" v-if="schedule?.fixtures?.length">
               <div class="fixture-item" v-for="(f, i) in schedule.fixtures" :key="i">
                 <span class="date">{{ f.match_date }}</span>
-                <span class="teams">{{ f.home_team }} vs {{ f.away_team }}</span>
+                <span class="teams">{{ f.home_team_cn || f.home_team }} vs {{ f.away_team_cn || f.away_team }}</span>
                 <span class="competition">{{ f.competition }}</span>
               </div>
             </div>

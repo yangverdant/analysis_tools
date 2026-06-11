@@ -1,0 +1,67 @@
+======================================================================
+  高赔率区间(3.0+)改错模式分析
+======================================================================
+
+  === 改错模式 (odds>=3.0) ===
+  赔率→away(✓) 模型→draw(✗): 3场 (37.5%)
+  赔率→away(✓) 模型→home(✗): 3场 (37.5%)
+  模型→draw(✓) 赔率→away(✗): 2场 (25.0%)
+
+  === 改错中的flag分布 ===
+  draw_threshold_0.3: 5场 (62.5%)
+  clv_motivation_aligned: 3场 (37.5%)
+  fatigue: 2场 (25.0%)
+
+  === 改对中的flag分布 ===
+  draw_threshold_0.3: 2场 (25.0%)
+
+  === signal强度分桶 ===
+  signal 0-0.1: n=216 model=41.2% odds=40.7% gap=+0.5pp
+  signal 0.1-0.2: n=333 model=44.4% odds=44.4% gap=+0.0pp
+  signal 0.2-0.3: n=369 model=51.5% odds=52.3% gap=-0.8pp
+  signal 0.3-0.5: n=611 model=56.0% odds=56.1% gap=-0.2pp
+  signal 0.5+: n=851 model=60.8% odds=60.9% gap=-0.1pp
+
+  === 典型改错案例 (前20) ===
+  2025-03-02 Municipal Limeno vs Luis Angel Firpo (bundesliga)
+    odds_h=3.01 score=1-4
+    模型: h=31.0% d=36.2% a=32.8% → draw
+    赔率: h=31.0% d=0.0% a=32.8% → away
+    signal=-0.020 conf=0.50 strength=none
+    flags=fatigue,draw_threshold_0.3
+  2026-04-19 Pisa vs Genoa (serie_a)
+    odds_h=3.24 score=1-2
+    模型: h=43.9% d=34.9% a=21.2% → home
+    赔率: h=31.5% d=0.0% a=36.8% → away
+    signal=0.306 conf=0.50 strength=none
+    flags=clv_motivation_aligned,draw_threshold_0.3
+  2024-04-25 Udinese vs Roma (serie_a)
+    odds_h=3.41 score=1-2
+    模型: h=24.0% d=43.0% a=33.0% → draw
+    赔率: h=18.6% d=0.0% a=25.6% → away
+    signal=-0.589 conf=0.50 strength=none
+    flags=fatigue,draw_threshold_0.3
+  2026-02-15 Oviedo vs Athletic Bilbao (la_liga)
+    odds_h=3.55 score=1-2
+    模型: h=39.6% d=34.7% a=25.7% → home
+    赔率: h=28.8% d=0.0% a=39.0% → away
+    signal=0.267 conf=0.50 strength=none
+    flags=clv_motivation_aligned,draw_threshold_0.3
+  2024-05-19 Toulouse vs Stade Brestois 29 (ligue_1)
+    odds_h=3.86 score=0-3
+    模型: h=39.6% d=26.4% a=34.1% → home
+    赔率: h=32.4% d=0.0% a=41.6% → away
+    signal=0.246 conf=0.50 strength=none
+    flags=clv_motivation_aligned
+  2025-04-24 11 Deportivo vs Luis Angel Firpo (bundesliga)
+    odds_h=6.61 score=1-3
+    模型: h=14.0% d=45.1% a=40.9% → draw
+    赔率: h=14.0% d=0.0% a=40.9% → away
+    signal=-0.210 conf=0.50 strength=none
+    flags=draw_threshold_0.3
+
+  总改错: 8场, 总改对: 8场, 净差: 0
+
+======================================================================
+  分析完成
+======================================================================

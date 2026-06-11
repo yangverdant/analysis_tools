@@ -69,7 +69,7 @@ class StandingData(BaseModel):
     lost: int
     goals_for: int
     goals_against: int
-    goal_difference: int
+    goal_difference: Optional[int] = None
     points: int
     form: Optional[str] = None
     league: Optional[str] = None

@@ -609,24 +609,8 @@ export default {
         teams.value = response.data.teams || []
       } catch (error) {
         console.error('加载球队失败:', error)
-        // 如果API不可用，加载模拟数据
-        teams.value = [
-          { team_id: 1, canonical_name: 'Arsenal', chinese_name: '阿森纳', team_type: 'club', country: 'England' },
-          { team_id: 2, canonical_name: 'Chelsea', chinese_name: '切尔西', team_type: 'club', country: 'England' },
-          { team_id: 3, canonical_name: 'Liverpool', chinese_name: '利物浦', team_type: 'club', country: 'England' },
-          { team_id: 4, canonical_name: 'Manchester City', chinese_name: '曼城', team_type: 'club', country: 'England' },
-          { team_id: 5, canonical_name: 'Manchester United', chinese_name: '曼联', team_type: 'club', country: 'England' },
-          { team_id: 6, canonical_name: 'Tottenham', chinese_name: '热刺', team_type: 'club', country: 'England' },
-          { team_id: 7, canonical_name: 'Barcelona', chinese_name: '巴塞罗那', team_type: 'club', country: 'Spain' },
-          { team_id: 8, canonical_name: 'Real Madrid', chinese_name: '皇家马德里', team_type: 'club', country: 'Spain' },
-          { team_id: 9, canonical_name: 'Bayern Munich', chinese_name: '拜仁慕尼黑', team_type: 'club', country: 'Germany' },
-          { team_id: 10, canonical_name: 'Juventus', chinese_name: '尤文图斯', team_type: 'club', country: 'Italy' },
-          { team_id: 11, canonical_name: 'PSG', chinese_name: '巴黎圣日耳曼', team_type: 'club', country: 'France' },
-          { team_id: 12, canonical_name: 'Newcastle', chinese_name: '', team_type: 'club', country: 'England' },
-          { team_id: 13, canonical_name: 'Brighton', chinese_name: '', team_type: 'club', country: 'England' },
-          { team_id: 14, canonical_name: 'Aston Villa', chinese_name: '阿斯顿维拉', team_type: 'club', country: 'England' },
-          { team_id: 15, canonical_name: 'England', chinese_name: '英格兰', team_type: 'national', country: 'England' }
-        ]
+        teams.value = []
+        showNotification('加载球队失败: ' + (error.response?.data?.detail || error.message), 'error')
       }
     }
 
@@ -660,8 +644,8 @@ export default {
         showNotification('球队信息已保存', 'success')
       } catch (error) {
         console.error('保存球队失败:', error)
-        team.modified = false
-        showNotification('保存成功（本地）', 'success')
+        team.modified = true
+        showNotification('保存失败: ' + (error.response?.data?.detail || error.message), 'error')
       }
     }
 

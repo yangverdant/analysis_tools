@@ -42,24 +42,30 @@ class H2HAnalyzer:
         # 获取所有交锋比赛（无论主客场）
         cursor.execute("""
             SELECT
-                match_id,
-                match_date,
-                season_id,
-                league_id,
-                home_team_id,
-                away_team_id,
-                home_goals,
-                away_goals,
-                home_goals_ht,
-                away_goals_ht,
-                venue
-            FROM matches
-            WHERE (home_team_id = ? AND away_team_id = ?)
-               OR (home_team_id = ? AND away_team_id = ?)
-            AND status = 'finished'
-            AND home_goals IS NOT NULL
-            AND away_goals IS NOT NULL
-            ORDER BY match_date DESC
+                m.match_id,
+                m.match_date,
+                m.season_id,
+                m.league_id,
+                m.home_team_id,
+                m.away_team_id,
+                m.home_goals,
+                m.away_goals,
+                m.home_goals_ht,
+                m.away_goals_ht,
+                m.venue,
+                ht.name_en as home_team_name,
+                at.name_en as away_team_name,
+                ht.name_cn as home_team_cn,
+                at.name_cn as away_team_cn
+            FROM matches m
+            LEFT JOIN teams ht ON m.home_team_id = ht.team_id
+            LEFT JOIN teams at ON m.away_team_id = at.team_id
+            WHERE (m.home_team_id = ? AND m.away_team_id = ?)
+               OR (m.home_team_id = ? AND m.away_team_id = ?)
+            AND m.status = 'finished'
+            AND m.home_goals IS NOT NULL
+            AND m.away_goals IS NOT NULL
+            ORDER BY m.match_date DESC
             LIMIT ?
         """, (team1_id, team2_id, team2_id, team1_id, limit))
 
@@ -76,22 +82,35 @@ class H2HAnalyzer:
                 team2_goals = row['home_goals']
 
             # 判断结果（从team1角度）
-            if team1_goals > team2_goals:
-                result_for_team1 = 'win'
-            elif team1_goals < team2_goals:
-                result_for_team1 = 'loss'
+            if team1_goals is not None and team2_goals is not None:
+                if team1_goals > team2_goals:
+                    result_for_team1 = 'win'
+                elif team1_goals < team2_goals:
+                    result_for_team1 = 'loss'
+                else:
+                    result_for_team1 = 'draw'
+                total_goals = team1_goals + team2_goals
             else:
-                result_for_team1 = 'draw'
+                result_for_team1 = 'unknown'
+                total_goals = 0
 
             matches.append({
                 'match_id': row['match_id'],
-                'date': row['match_date'],
+                'match_date': row['match_date'],
                 'season_id': row['season_id'],
                 'league_id': row['league_id'],
+                'home_team_id': row['home_team_id'],
+                'away_team_id': row['away_team_id'],
+                'home_team': row['home_team_name'],
+                'away_team': row['away_team_name'],
+                'home_team_cn': row['home_team_cn'],
+                'away_team_cn': row['away_team_cn'],
+                'home_goals': row['home_goals'],
+                'away_goals': row['away_goals'],
                 'team1_role': team1_role,
                 'team1_goals': team1_goals,
                 'team2_goals': team2_goals,
-                'total_goals': team1_goals + team2_goals,
+                'total_goals': total_goals,
                 'result_for_team1': result_for_team1,
                 'venue': row['venue']
             })
@@ -127,8 +146,8 @@ class H2HAnalyzer:
         draws = sum(1 for m in matches if m['result_for_team1'] == 'draw')
 
         # 统计进球
-        team1_total_goals = sum(m['team1_goals'] for m in matches)
-        team2_total_goals = sum(m['team2_goals'] for m in matches)
+        team1_total_goals = sum(m['team1_goals'] or 0 for m in matches)
+        team2_total_goals = sum(m['team2_goals'] or 0 for m in matches)
 
         # 主客场分析
         team1_home_matches = [m for m in matches if m['team1_role'] == 'home']
@@ -138,12 +157,12 @@ class H2HAnalyzer:
         team1_away_wins = sum(1 for m in team1_away_matches if m['result_for_team1'] == 'win')
 
         # 大小球分析
-        high_score_matches = sum(1 for m in matches if m['total_goals'] >= 3)
-        low_score_matches = sum(1 for m in matches if m['total_goals'] <= 1)
+        high_score_matches = sum(1 for m in matches if (m['total_goals'] or 0) >= 3)
+        low_score_matches = sum(1 for m in matches if (m['total_goals'] or 0) <= 1)
 
         # 零封分析
-        team1_clean_sheets = sum(1 for m in matches if m['team2_goals'] == 0)
-        team2_clean_sheets = sum(1 for m in matches if m['team1_goals'] == 0)
+        team1_clean_sheets = sum(1 for m in matches if (m['team2_goals'] or 0) == 0)
+        team2_clean_sheets = sum(1 for m in matches if (m['team1_goals'] or 0) == 0)
 
         # 计算心理优势
         psychological_advantage = self._calculate_psychological_advantage(

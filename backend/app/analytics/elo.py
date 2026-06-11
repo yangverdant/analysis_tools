@@ -39,7 +39,7 @@ class EloAnalyzer:
         """, (team_id,))
         result = cursor.fetchone()
         if result:
-            return result['elo_rating']
+            return float(result['elo_rating'])
         return self.DEFAULT_ELO
 
     def calculate_expected_score(self, rating_a: float, rating_b: float) -> float:

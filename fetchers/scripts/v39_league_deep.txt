@@ -1,0 +1,72 @@
+================================================================================
+  v3.9分联赛深度分析: 模型表现 × draw率 × dt30比例 × 冷门率
+================================================================================
+
+  === 分组统计 ===
+  top5  : 3740/6946= 53.8% Brier=0.5812 draw_rate=25.5% draw_pred=27 prec=37%
+  div2  : 1644/3472= 47.4% Brier=0.6210 draw_rate=28.4% draw_pred=0 prec=0%
+  cup   :  856/1890= 45.3% Brier=0.6460 draw_rate=21.7% draw_pred=0 prec=0%
+  other :  797/1685= 47.3% Brier=0.6134 draw_rate=24.3% draw_pred=140 prec=17%
+
+  === 逐联赛分析(≥30场) ===
+  联赛                                          N    准确率   Brier  Draw率   Draw预测  Draw精度 dt30%    冷门率    场均进球    类型
+  ---------------------------------------- ---- ------ ------- ------ -------- ------- ----- ------ ------- -----
+  conference_league                        1192  44.5% 0.6521  20.6%    0/246     0%     0%  48.2%   2.8   C
+  championship                             1104  49.2% 0.6105  25.8%    0/285     0%     9%  26.2%   2.6   D2
+  primeira_liga                            1073  41.8% 0.6542  24.0%  140/257    17%     0%  44.5%   2.6     
+  la_liga_2                                 924  48.1% 0.6175  29.1%    0/269     0%    48%  22.7%   2.4   D2
+  bundesliga                                843  53.6% 0.5758  26.0%   23/219    43%    23%  21.0%   2.8     
+  La Liga                                   760  53.8% 0.5892  25.0%    2/190     0%    19%  31.2%   2.7     
+  Serie A                                   760  53.2% 0.5797  27.2%    0/207     0%    27%  21.1%   2.5     
+  serie_b                                   759  44.1% 0.6359  33.1%    0/251     0%    49%  23.7%   2.5   D2
+  Premier League                            759  53.2% 0.5880  26.0%    0/197     0%     3%  23.1%   2.8     
+  ligue_2                                   685  47.0% 0.6261  26.4%    0/181     0%    29%  25.8%   2.5   D2
+  la_liga                                   666  57.1% 0.5488  25.4%    1/169     0%    24%  17.7%   2.7     
+  bundesliga_2                              612  47.4% 0.6272  25.7%    0/157     0%     0%  26.3%   3.1     
+  eredivisie                                612  56.9% 0.5419  25.0%    0/153     0%     1%  19.0%   3.1     
+  Bundesliga                                611  55.5% 0.5765  24.9%    0/152     0%     2%  22.9%   3.2     
+  Ligue 1                                   610  54.8% 0.5816  22.3%    0/136     0%     4%  26.9%   2.9     
+  copa_libertadores                         570  47.4% 0.6313  24.9%    0/142     0%     0%  51.8%   2.5   C
+  premier_league                            532  56.6% 0.5641  23.5%    0/125     0%     2%  21.2%   3.1     
+  serie_a                                   418  55.3% 0.5724  29.7%    1/124     0%    20%  14.6%   2.6     
+  ligue_1                                   375  52.3% 0.5905  25.3%    0/ 95     0%     6%  22.4%   2.8     
+  world_cup                                 128  43.8% 0.6544  18.0%    0/ 23     0%     0%  45.3%   2.7   C
+
+  === Draw率异常联赛(实际draw率 > 30% 或 < 20%, ≥50场) ===
+  serie_b                                  N= 759 acc= 44.1% draw_rate=33.1% pred=0 prec=0%
+  world_cup                                N= 128 acc= 43.8% draw_rate=18.0% pred=0 prec=0%
+
+  === 准确率最低联赛(≤45%, ≥50场) ===
+  primeira_liga                            N=1073 acc= 41.8% draw_rate=24.0% pred=140 prec=17% dt30=0% goals=2.6
+  world_cup                                N= 128 acc= 43.8% draw_rate=18.0% pred=0 prec=0% dt30=0% goals=2.7
+  serie_b                                  N= 759 acc= 44.1% draw_rate=33.1% pred=0 prec=0% dt30=49% goals=2.5
+  conference_league                        N=1192 acc= 44.5% draw_rate=20.6% pred=0 prec=0% dt30=0% goals=2.8
+
+  === Draw预测效果最差(预测draw>5场且precision<20%, ≥50场) ===
+  primeira_liga                            N=1073 acc= 41.8% draw_rate=24.0% pred=140 prec=17%
+
+  === 场均进球 × Draw率(≥50场) ===
+  la_liga_2                                goals=2.4 draw_rate=29.1% N=924
+  serie_b                                  goals=2.5 draw_rate=33.1% N=759
+  copa_libertadores                        goals=2.5 draw_rate=24.9% N=570
+  Serie A                                  goals=2.5 draw_rate=27.2% N=760
+  ligue_2                                  goals=2.5 draw_rate=26.4% N=685
+  championship                             goals=2.6 draw_rate=25.8% N=1104
+  serie_a                                  goals=2.6 draw_rate=29.7% N=418
+  primeira_liga                            goals=2.6 draw_rate=24.0% N=1073
+  La Liga                                  goals=2.7 draw_rate=25.0% N=760
+  la_liga                                  goals=2.7 draw_rate=25.4% N=666
+  world_cup                                goals=2.7 draw_rate=18.0% N=128
+  conference_league                        goals=2.8 draw_rate=20.6% N=1192
+  bundesliga                               goals=2.8 draw_rate=26.0% N=843
+  ligue_1                                  goals=2.8 draw_rate=25.3% N=375
+  Premier League                           goals=2.8 draw_rate=26.0% N=759
+  Ligue 1                                  goals=2.9 draw_rate=22.3% N=610
+  bundesliga_2                             goals=3.1 draw_rate=25.7% N=612
+  eredivisie                               goals=3.1 draw_rate=25.0% N=612
+  premier_league                           goals=3.1 draw_rate=23.5% N=532
+  Bundesliga                               goals=3.2 draw_rate=24.9% N=611
+
+================================================================================
+  分联赛深度分析完成
+================================================================================

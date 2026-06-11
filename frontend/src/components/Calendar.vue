@@ -87,7 +87,8 @@
 </template>
 
 <script>
-import { ref, computed, h } from 'vue'
+import { ref, computed, h, onMounted, watch } from 'vue'
+import { matchAPI } from '../api'
 
 const ChevronLeftIcon = () => h('svg', { class: 'w-3.5 h-3.5', viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', 'stroke-width': '2' }, [
   h('polyline', { points: '15 18 9 12 15 6' })
@@ -119,23 +120,46 @@ export default {
       return `${currentDate.value.getFullYear()}年 ${months[currentDate.value.getMonth()]}`
     })
 
-    // 模拟比赛数据
-    const matchesData = {
-      '2024-05-11': [
-        { id: 1, time: '22:00', league: '英超', leagueClass: 'premier', homeTeam: '曼城', awayTeam: '阿森纳', odds: { home: 1.85, draw: 3.50, away: 4.20 }, notify: true },
-        { id: 2, time: '19:30', league: '西甲', leagueClass: 'laliga', homeTeam: '皇马', awayTeam: '巴萨', odds: { home: 2.10, draw: 3.30, away: 3.40 }, notify: false },
-      ],
-      '2024-05-12': [
-        { id: 3, time: '21:30', league: '德甲', leagueClass: 'bundesliga', homeTeam: '拜仁', awayTeam: '多特', odds: { home: 1.65, draw: 3.80, away: 5.00 }, notify: false },
-        { id: 4, time: '22:00', league: '意甲', leagueClass: 'seriea', homeTeam: '尤文', awayTeam: '国米', odds: { home: 2.30, draw: 3.20, away: 3.10 }, notify: true },
-      ],
-      '2024-05-13': [
-        { id: 5, time: '03:00', league: '法甲', leagueClass: 'ligue1', homeTeam: '巴黎', awayTeam: '马赛', odds: { home: 1.45, draw: 4.20, away: 6.50 }, notify: false },
-      ],
-      '2024-05-15': [
-        { id: 6, time: '03:00', league: '欧冠', leagueClass: 'ucl', homeTeam: '皇马', awayTeam: '拜仁', notify: true },
-      ],
+    // 从API加载比赛数据
+    const matchesByDate = ref({})
+    const loading = ref(false)
+
+    const loadMonthMatches = async () => {
+      loading.value = true
+      try {
+        const year = currentDate.value.getFullYear()
+        const month = currentDate.value.getMonth()
+        const startDate = `${year}-${String(month + 1).padStart(2, '0')}-01`
+        const endDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(new Date(year, month + 1, 0).getDate()).padStart(2, '0')}`
+        const res = await matchAPI.getByDateRange(startDate, endDate)
+        const matches = res.matches || res || []
+        const grouped = {}
+        matches.forEach(m => {
+          const date = (m.match_date || m.date || '').slice(0, 10)
+          if (!date) return
+          if (!grouped[date]) grouped[date] = []
+          grouped[date].push({
+            id: m.match_id || m.id,
+            time: m.match_time || m.time || '',
+            league: m.league_name_cn || m.league_name || m.league || '',
+            leagueClass: '',
+            homeTeam: m.home_team_name_cn || m.home_team_name || m.home_team || '',
+            awayTeam: m.away_team_name_cn || m.away_team_name || m.away_team || '',
+            odds: m.home_odds ? { home: m.home_odds, draw: m.draw_odds, away: m.away_odds } : null,
+            notify: false
+          })
+        })
+        matchesByDate.value = grouped
+      } catch (e) {
+        console.error('加载赛程失败:', e)
+        matchesByDate.value = {}
+      } finally {
+        loading.value = false
+      }
     }
+
+    watch(currentDate, () => { loadMonthMatches() })
+    onMounted(() => { loadMonthMatches() })
 
     const calendarDays = computed(() => {
       const year = currentDate.value.getFullYear()
@@ -168,15 +192,17 @@ export default {
     })
 
     const createDayObject = (date, otherMonth) => {
-      const dateStr = date.toISOString().split('T')[0]
+      const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
       const today = new Date()
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+      const selStr = `${selectedDate.value.getFullYear()}-${String(selectedDate.value.getMonth() + 1).padStart(2, '0')}-${String(selectedDate.value.getDate()).padStart(2, '0')}`
       return {
         date: dateStr,
         dayNum: date.getDate(),
         otherMonth,
-        isToday: date.toDateString() === today.toDateString(),
-        isSelected: date.toDateString() === selectedDate.value.toDateString(),
-        matches: matchesData[dateStr] || []
+        isToday: dateStr === todayStr,
+        isSelected: dateStr === selStr,
+        matches: matchesByDate.value[dateStr] || []
       }
     }
 

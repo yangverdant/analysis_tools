@@ -41,6 +41,7 @@ env/
 
 # 敏感配置
 config/secrets.json
+config/api_keys.yaml
 .env
 *.pem
 *.key
@@ -72,3 +73,14 @@ temp/
 
 # Node modules
 node_modules/
+%TEMP%wc_fifa.html
+temp_okooo_crawler/
+DATA_COLLECTION_RECORD.md
+PROJECT.md
+frontend/dist/
+world_cup_details/
+world_cup_processed/
+international_data/
+test_*.html
+national_teams_history/
+fetchers/scripts/*_result.txt

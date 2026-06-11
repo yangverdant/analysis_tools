@@ -1,0 +1,19 @@
+[Unit]
+Description=Football Analyst API Server
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/football_tools
+Environment=PATH=/opt/football_tools/venv/bin:/usr/bin:/bin
+Environment=DB_PATH=/opt/football_tools/data/football_v2.db
+Environment=TZ=Asia/Shanghai
+ExecStart=/opt/football_tools/venv/bin/uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --workers 2
+Restart=always
+RestartSec=5
+StandardOutput=append:/opt/football_tools/logs/uvicorn.log
+StandardError=append:/opt/football_tools/logs/uvicorn_error.log
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,221 @@
+======================================================================
+  odds 2.0-3.0区间: 模型 vs 赔率预测差异分析
+======================================================================
+
+  === 总体 ===
+  n=4206
+  A(赔率✓模型✓): 1444 (34.3%)
+  B(赔率✓模型✗): 307 (7.3%) — 模型改错
+  C(赔率✗模型✓): 270 (6.4%) — 模型改对
+  D(赔率✗模型✗): 2185 (51.9%) — 都错
+  模型改错净损失: 37场 (0.9pp)
+
+  === 模型改错的比赛(B类) — top 30 ===
+  2025-10-05 Fiorentina vs Roma (Serie A)
+    score=1-2 actual=away 赔率=away 模型=draw
+    赔率: h=31.1% d=0.0% a=38.6%
+    模型: h=28.6% d=35.9% a=35.5%
+    signal=-0.8544 flags=draw_threshold_0.3
+  2026-02-03 Bologna vs AC Milan (Serie A)
+    score=0-3 actual=away 赔率=away 模型=draw
+    赔率: h=30.8% d=0.0% a=38.6%
+    模型: h=28.4% d=36.0% a=35.6%
+    signal=-0.8133 flags=draw_threshold_0.3
+  2025-09-21 Lazio vs Roma (Serie A)
+    score=0-1 actual=away 赔率=away 模型=draw
+    赔率: h=33.7% d=0.0% a=34.5%
+    模型: h=31.3% d=36.6% a=32.1%
+    signal=-0.6513 flags=draw_threshold_0.3
+  2026-01-19 Lazio vs Como (Serie A)
+    score=0-3 actual=away 赔率=away 模型=draw
+    赔率: h=30.2% d=0.0% a=36.8%
+    模型: h=28.3% d=37.2% a=34.4%
+    signal=-0.5931 flags=clv_motivation_aligned,draw_threshold_0.3
+  2024-02-10 Las Palmas vs Valencia (la_liga)
+    score=2-0 actual=home 赔率=home 模型=draw
+    赔率: h=37.2% d=0.0% a=30.6%
+    模型: h=34.6% d=36.8% a=28.5%
+    signal=0.5601 flags=clv_motivation_aligned,draw_threshold_0.3
+  2025-10-18 Sunderland vs Wolverhampton Wanderers (Premier League)
+    score=2-0 actual=home 赔率=home 模型=draw
+    赔率: h=38.0% d=0.0% a=30.7%
+    模型: h=35.6% d=35.7% a=28.8%
+    signal=0.5494 flags=draw_threshold_0.3
+  2025-02-16 Stade Rennais vs Lille (Ligue 1)
+    score=0-2 actual=away 赔率=away 模型=draw
+    赔率: h=31.8% d=0.0% a=37.5%
+    模型: h=29.3% d=36.1% a=34.6%
+    signal=-0.4939 flags=draw_threshold_0.3
+  2024-01-02 Valencia vs Villarreal (la_liga)
+    score=3-1 actual=home 赔率=home 模型=away
+    赔率: h=43.7% d=0.0% a=28.3%
+    模型: h=28.1% d=30.4% a=41.5%
+    signal=-0.4886 flags=clv_motivation_aligned,draw_threshold_0.28
+  2025-05-04 Chelsea vs Liverpool (Premier League)
+    score=3-1 actual=home 赔率=home 模型=away
+    赔率: h=40.7% d=0.0% a=33.5%
+    模型: h=26.1% d=28.0% a=46.0%
+    signal=-0.4621 flags=clv_motivation_aligned,fatigue
+  2025-11-09 Angers vs AJ Auxerre (Ligue 1)
+    score=2-0 actual=home 赔率=home 模型=draw
+    赔率: h=37.1% d=0.0% a=31.6%
+    模型: h=34.3% d=36.4% a=29.3%
+    signal=0.4591 flags=draw_threshold_0.3
+  2023-11-05 Fiorentina vs Juventus (serie_a)
+    score=0-1 actual=away 赔率=away 模型=draw
+    赔率: h=33.3% d=0.0% a=36.1%
+    模型: h=30.7% d=36.0% a=33.2%
+    signal=-0.4555 flags=draw_threshold_0.3
+  2024-12-01 Rayo Vallecano vs Athletic Bilbao (La Liga)
+    score=1-2 actual=away 赔率=away 模型=draw
+    赔率: h=29.3% d=0.0% a=38.9%
+    模型: h=27.2% d=36.7% a=36.1%
+    signal=-0.4531 flags=draw_threshold_0.3
+  2025-09-20 Wolverhampton Wanderers vs Leeds United (Premier League)
+    score=1-3 actual=away 赔率=away 模型=draw
+    赔率: h=32.8% d=0.0% a=36.6%
+    模型: h=30.2% d=36.1% a=33.7%
+    signal=-0.4349 flags=draw_threshold_0.3
+  2025-09-29 Genoa vs Lazio (Serie A)
+    score=0-3 actual=away 赔率=away 模型=draw
+    赔率: h=32.7% d=0.0% a=35.1%
+    模型: h=30.4% d=36.8% a=32.7%
+    signal=-0.4092 flags=draw_threshold_0.3
+  2024-02-10 Fulham vs Bournemouth (premier_league)
+    score=3-1 actual=home 赔率=home 模型=away
+    赔率: h=37.6% d=0.0% a=35.0%
+    模型: h=24.5% d=30.2% a=45.3%
+    signal=-0.4054 flags=clv_motivation_aligned,draw_threshold_0.26
+  2025-04-05 Mallorca vs Celta Vigo (La Liga)
+    score=1-2 actual=away 赔率=away 模型=draw
+    赔率: h=34.0% d=0.0% a=35.0%
+    模型: h=31.4% d=36.2% a=32.4%
+    signal=-0.3738 flags=draw_threshold_0.3
+  2024-10-05 Udinese vs Lecce (Serie A)
+    score=1-0 actual=home 赔率=home 模型=draw
+    赔率: h=36.7% d=0.0% a=31.2%
+    模型: h=34.5% d=36.1% a=29.3%
+    signal=0.3573 flags=draw_threshold_0.3
+  2026-01-17 Real Betis vs Villarreal (La Liga)
+    score=2-0 actual=home 赔率=home 模型=away
+    赔率: h=37.0% d=0.0% a=35.7%
+    模型: h=25.3% d=30.9% a=43.8%
+    signal=-0.3436 flags=draw_threshold_0.26
+  2025-01-25 Napoli vs Juventus (Serie A)
+    score=2-1 actual=home 赔率=home 模型=draw
+    赔率: h=37.7% d=0.0% a=29.2%
+    模型: h=35.7% d=36.6% a=27.7%
+    signal=0.3410 flags=draw_threshold_0.3
+  2026-01-26 Hellas Verona vs Udinese (Serie A)
+    score=1-3 actual=away 赔率=away 模型=draw
+    赔率: h=32.2% d=0.0% a=34.9%
+    模型: h=30.1% d=37.2% a=32.7%
+    signal=-0.3323 flags=draw_threshold_0.3
+  2025-10-26 Torino vs Genoa (Serie A)
+    score=2-1 actual=home 赔率=home 模型=draw
+    赔率: h=38.2% d=0.0% a=29.0%
+    模型: h=36.1% d=36.5% a=27.4%
+    signal=0.3140 flags=draw_threshold_0.3
+  2023-12-08 Getafe vs Valencia (la_liga)
+    score=1-0 actual=home 赔率=home 模型=draw
+    赔率: h=36.3% d=0.0% a=30.7%
+    模型: h=34.0% d=37.2% a=28.8%
+    signal=0.3063 flags=draw_threshold_0.3
+  2026-01-21 Platense Municipal vs Municipal Limeno (bundesliga)
+    score=0-1 actual=away 赔率=away 模型=draw
+    赔率: h=33.1% d=0.0% a=36.2%
+    模型: h=38.8% d=43.7% a=17.5%
+    signal=0.3044 flags=fatigue,draw_threshold_0.3
+  2025-09-19 Lecce vs Cagliari (Serie A)
+    score=1-2 actual=away 赔率=away 模型=draw
+    赔率: h=33.2% d=0.0% a=34.4%
+    模型: h=30.9% d=37.0% a=32.1%
+    signal=-0.3024 flags=draw_threshold_0.3
+  2026-02-22 FC St. Pauli vs SV Werder Bremen (Bundesliga)
+    score=2-1 actual=home 赔率=home 模型=draw
+    赔率: h=35.4% d=0.0% a=34.4%
+    模型: h=32.6% d=35.8% a=31.6%
+    signal=0.2974 flags=draw_threshold_0.3
+  2025-02-22 Cittadella vs Modena (serie_b)
+    score=0-2 actual=away 赔率=away 模型=draw
+    赔率: h=27.7% d=0.0% a=38.7%
+    模型: h=26.0% d=37.6% a=36.4%
+    signal=-0.2939 flags=draw_threshold_0.3
+  2024-09-23 Huesca vs Cordoba (la_liga_2)
+    score=4-1 actual=home 赔率=home 模型=draw
+    赔率: h=39.4% d=0.0% a=27.6%
+    模型: h=36.9% d=37.3% a=25.8%
+    signal=0.2921 flags=draw_threshold_0.3
+  2024-04-07 Tenerife vs Eibar (la_liga_2)
+    score=2-1 actual=home 赔率=home 模型=draw
+    赔率: h=38.9% d=0.0% a=28.4%
+    模型: h=36.3% d=37.1% a=26.5%
+    signal=0.2918 flags=draw_threshold_0.3
+  2024-04-20 Ajaccio vs Caen (ligue_2)
+    score=2-1 actual=home 赔率=home 模型=draw
+    赔率: h=38.6% d=0.0% a=27.7%
+    模型: h=36.3% d=37.6% a=26.1%
+    signal=0.2917 flags=draw_threshold_0.3
+  2024-02-25 FC Augsburg vs SC Freiburg (bundesliga)
+    score=2-1 actual=home 赔率=home 模型=away
+    赔率: h=40.1% d=0.0% a=33.1%
+    模型: h=30.0% d=30.0% a=40.0%
+    signal=-0.2909 flags=clv_motivation_aligned,draw_threshold_0.26
+
+  === 模型改对的比赛(C类) — top 20 ===
+  2026-02-01 Getafe vs Celta Vigo (La Liga)
+    score=0-0 actual=draw 赔率=away 模型=draw signal=-0.5364
+  2024-12-08 Venezia vs Como (Serie A)
+    score=2-2 actual=draw 赔率=away 模型=draw signal=-0.5065
+  2023-11-12 Lazio vs Roma (serie_a)
+    score=0-0 actual=draw 赔率=away 模型=draw signal=-0.4721
+  2025-05-11 Hellas Verona vs Lecce (Serie A)
+    score=1-1 actual=draw 赔率=home 模型=draw signal=0.4684
+  2025-12-05 Oviedo vs Mallorca (la_liga)
+    score=0-0 actual=draw 赔率=home 模型=draw signal=0.4496
+  2025-01-05 Lecce vs Genoa (Serie A)
+    score=0-0 actual=draw 赔率=away 模型=draw signal=-0.4384
+  2024-08-16 Las Palmas vs Sevilla (La Liga)
+    score=2-2 actual=draw 赔率=home 模型=draw signal=0.4280
+  2026-04-18 Newcastle United vs Bournemouth (Premier League)
+    score=1-2 actual=away 赔率=home 模型=away signal=-0.4230
+  2026-04-05 Le Havre vs AJ Auxerre (Ligue 1)
+    score=1-1 actual=draw 赔率=home 模型=draw signal=0.4166
+  2026-01-25 Newcastle United vs Aston Villa (Premier League)
+    score=0-2 actual=away 赔率=home 模型=away signal=-0.4064
+  2026-04-19 Cremonese vs Torino (Serie A)
+    score=0-0 actual=draw 赔率=away 模型=draw signal=-0.3995
+  2024-05-15 Manchester United vs Newcastle United (premier_league)
+    score=3-2 actual=home 赔率=away 模型=home signal=0.3917
+  2025-04-02 Brighton and Hove Albion vs Aston Villa (premier_league)
+    score=0-3 actual=away 赔率=home 模型=away signal=-0.3888
+  2023-12-06 Manchester United vs Chelsea (premier_league)
+    score=2-1 actual=home 赔率=away 模型=home signal=0.3778
+  2023-08-18 Mallorca vs Villarreal (la_liga)
+    score=0-1 actual=away 赔率=home 模型=away signal=-0.3675
+  2025-10-18 Lecce vs Sassuolo (Serie A)
+    score=0-0 actual=draw 赔率=away 模型=draw signal=-0.3638
+  2025-05-02 Torino vs Venezia (Serie A)
+    score=1-1 actual=draw 赔率=home 模型=draw signal=0.3630
+  2026-01-18 Parma vs Genoa (Serie A)
+    score=0-0 actual=draw 赔率=home 模型=draw signal=0.3454
+  2025-11-08 Lecce vs Hellas Verona (Serie A)
+    score=0-0 actual=draw 赔率=home 模型=draw signal=0.3443
+  2025-10-18 1. FSV Mainz 05 vs Bayer Leverkusen (Bundesliga)
+    score=3-4 actual=away 赔率=home 模型=away signal=-0.3433
+
+  === 信号方向对改错率的影响 ===
+  信号正(home倾向): n=2857 改错=142(5.0%) 改对=118(4.1%) 净损=24
+  信号负(away倾向): n=1043 改错=124(11.9%) 改对=114(10.9%) 净损=10
+  信号近0(draw倾向): n=306 改错=41(13.4%) 改对=38(12.4%) 净损=3
+
+  === 场景flag对改错率的影响 ===
+  draw_threshold_0.3: n=1527 改错=289(18.9%) 改对=239(15.7%) 净损=50
+  draw_threshold_0.28: n=1287 改错=6(0.5%) 改对=15(1.2%) 净损=-9
+  draw_threshold_0.26: n=977 改错=9(0.9%) 改对=13(1.3%) 净损=-4
+  fatigue: n=549 改错=44(8.0%) 改对=42(7.7%) 净损=2
+  clv_motivation_aligned: n=130 改错=11(8.5%) 改对=7(5.4%) 净损=4
+
+======================================================================
+  分析完成
+======================================================================

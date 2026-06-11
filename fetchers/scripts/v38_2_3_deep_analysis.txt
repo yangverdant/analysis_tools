@@ -1,0 +1,127 @@
+======================================================================
+  v3.8+ 2-3区间signal & draw深度分析
+======================================================================
+
+  [ah0_False] n=2898
+    model=42.6% odds=42.3% gap=+0.3pp
+    avg_dp=29.3% avg_dp_odds=0.0%
+    draw: pred=18 actual=868 prec=44% recall=1%
+    home: pred=2506 prec=43% | away: pred=374 prec=39%
+
+  [ah0_True] n=1308
+    model=40.1% odds=40.2% gap=-0.1pp
+    avg_dp=30.5% avg_dp_odds=0.0%
+    draw: pred=3 actual=410 prec=0% recall=0%
+    home: pred=670 prec=39% | away: pred=635 prec=42%
+
+  [clv_False] n=4076
+    model=41.9% odds=41.6% gap=+0.3pp
+    avg_dp=29.7% avg_dp_odds=0.0%
+    draw: pred=21 actual=1239 prec=38% recall=1%
+    home: pred=3100 prec=42% | away: pred=955 prec=41%
+
+  [clv_True] n=130
+    model=40.0% odds=43.8% gap=-3.8pp
+    avg_dp=29.0% avg_dp_odds=0.0%
+    draw: pred=0 actual=39 prec=0% recall=0%
+    home: pred=76 prec=39% | away: pred=54 prec=41%
+
+  [dt30_False] n=2679
+    model=43.0% odds=42.6% gap=+0.4pp
+    avg_dp=28.8% avg_dp_odds=0.0%
+    draw: pred=0 actual=804 prec=0% recall=0%
+    home: pred=1986 prec=43% | away: pred=693 prec=44%
+
+  [dt30_False_ah0_False] n=1905
+    model=43.5% odds=42.9% gap=+0.5pp
+    avg_dp=28.5% avg_dp_odds=0.0%
+    draw: pred=0 actual=560 prec=0% recall=0%
+    home: pred=1601 prec=44% | away: pred=304 prec=42%
+
+  [dt30_False_ah0_True] n=774
+    model=41.7% odds=41.7% gap=+0.0pp
+    avg_dp=29.7% avg_dp_odds=0.0%
+    draw: pred=0 actual=244 prec=0% recall=0%
+    home: pred=385 prec=38% | away: pred=389 prec=45%
+
+  [dt30_True] n=1527
+    model=39.8% odds=39.9% gap=-0.1pp
+    avg_dp=31.1% avg_dp_odds=0.0%
+    draw: pred=21 actual=474 prec=38% recall=2%
+    home: pred=1190 prec=41% | away: pred=316 prec=35%
+
+  [dt30_True_ah0_False] n=993
+    model=40.9% odds=41.0% gap=-0.1pp
+    avg_dp=30.9% avg_dp_odds=0.0%
+    draw: pred=18 actual=308 prec=44% recall=3%
+    home: pred=905 prec=42% | away: pred=70 prec=29%
+
+  [dt30_True_ah0_True] n=534
+    model=37.8% odds=38.0% gap=-0.2pp
+    avg_dp=31.6% avg_dp_odds=0.0%
+    draw: pred=3 actual=166 prec=0% recall=0%
+    home: pred=285 prec=39% | away: pred=246 prec=37%
+
+  [sig_negative] n=1008
+    model=41.3% odds=40.9% gap=+0.4pp
+    avg_dp=30.0% avg_dp_odds=0.0%
+    draw: pred=3 actual=300 prec=0% recall=0%
+    home: pred=105 prec=33% | away: pred=900 prec=42%
+
+  [sig_negative_dt30_False] n=689
+    model=43.4% odds=41.9% gap=+1.5pp
+    avg_dp=29.2% avg_dp_odds=0.0%
+    draw: pred=0 actual=199 prec=0% recall=0%
+    home: pred=78 prec=28% | away: pred=611 prec=45%
+
+  [sig_negative_dt30_True] n=319
+    model=36.7% odds=38.6% gap=-1.9pp
+    avg_dp=31.6% avg_dp_odds=0.0%
+    draw: pred=3 actual=101 prec=0% recall=0%
+    home: pred=27 prec=48% | away: pred=289 prec=36%
+
+  [sig_neutral] n=478
+    model=38.7% odds=38.1% gap=+0.6pp
+    avg_dp=30.0% avg_dp_odds=0.0%
+    draw: pred=16 actual=151 prec=44% recall=5%
+    home: pred=365 prec=42% | away: pred=97 prec=27%
+
+  [sig_neutral_dt30_False] n=259
+    model=39.0% odds=39.0% gap=+0.0pp
+    avg_dp=28.9% avg_dp_odds=0.0%
+    draw: pred=0 actual=76 prec=0% recall=0%
+    home: pred=188 prec=44% | away: pred=71 prec=27%
+
+  [sig_neutral_dt30_True] n=219
+    model=38.4% odds=37.0% gap=+1.4pp
+    avg_dp=31.4% avg_dp_odds=0.0%
+    draw: pred=16 actual=75 prec=44% recall=9%
+    home: pred=177 prec=40% | away: pred=26 prec=27%
+
+  [sig_positive] n=2720
+    model=42.6% odds=42.5% gap=+0.0pp
+    avg_dp=29.5% avg_dp_odds=0.0%
+    draw: pred=2 actual=827 prec=50% recall=0%
+    home: pred=2706 prec=42% | away: pred=12 prec=58%
+
+  [sig_positive_dt30_False] n=1731
+    model=43.4% odds=43.4% gap=+0.0pp
+    avg_dp=28.7% avg_dp_odds=0.0%
+    draw: pred=0 actual=529 prec=0% recall=0%
+    home: pred=1720 prec=43% | away: pred=11 prec=55%
+
+  [sig_positive_dt30_True] n=989
+    model=41.2% odds=41.1% gap=+0.1pp
+    avg_dp=30.9% avg_dp_odds=0.0%
+    draw: pred=2 actual=298 prec=50% recall=0%
+    home: pred=986 prec=41% | away: pred=1 prec=100%
+
+  [total] n=4206
+    model=41.8% odds=41.6% gap=+0.2pp
+    avg_dp=29.7% avg_dp_odds=0.0%
+    draw: pred=21 actual=1278 prec=38% recall=1%
+    home: pred=3176 prec=42% | away: pred=1009 prec=41%
+
+======================================================================
+  分析完成
+======================================================================

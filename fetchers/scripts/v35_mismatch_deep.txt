@@ -1,0 +1,217 @@
+======================================================================
+  动机不对称深入分析 — 按类别/赔率/月份交叉验证
+======================================================================
+  有动机+赔率数据的比赛: 5212
+
+  === 1. 动机类别组合胜率(所有赔率) ===
+  dead_rubber          vs dead_rubber         : n=1814 主= 41.1% 平= 29.5% 客= 29.3%
+  dead_rubber          vs relegation          : n=1176 主= 31.9% 平= 26.8% 客= 41.3% ***MISMATCH***
+  relegation           vs dead_rubber         : n=1175 主= 56.3% 平= 20.8% 客= 23.0%
+  relegation           vs relegation          : n=1047 主= 44.2% 平= 23.0% 客= 32.8%
+
+  === 2. 动机不对称候选(所有赔率, diff<-1.0) ===
+  总计: 1176场
+
+  按赔率区间:
+  <1.25: 5场 主=4(80%) 平=1(20%) 客=0(0%)
+  1.25-1.35: 10场 主=8(80%) 平=0(0%) 客=2(20%)
+  1.35-1.50: 37场 主=29(78%) 平=6(16%) 客=2(5%)
+  1.50-2.00: 175场 主=99(57%) 平=43(25%) 客=33(19%)
+  >2.00: 815场 主=185(23%) 平=232(28%) 客=398(49%)
+
+  按月份:
+  1月: 128场 主=33(26%) 平=44(34%) 客=51(40%)
+  2月: 130场 主=50(38%) 平=31(24%) 客=49(38%)
+  3月: 106场 主=39(37%) 平=27(25%) 客=40(38%)
+  4月: 137场 主=36(26%) 平=37(27%) 客=64(47%)
+  5月: 128场 主=48(38%) 平=31(24%) 客=49(38%)
+  8月: 91场 主=23(25%) 平=24(26%) 客=44(48%)
+  9月: 119场 主=37(31%) 平=27(23%) 客=55(46%)
+  10月: 94场 主=31(33%) 平=25(27%) 客=38(40%)
+  11月: 116场 主=35(30%) 平=41(35%) 客=40(34%)
+  12月: 127场 主=43(34%) 平=28(22%) 客=56(44%)
+
+  === 3. 关键交叉: 月份×赔率(动机不对称候选) ===
+  4-6月|1.35-1.50: 9场 主=6(67%) 平=2(22%) 客=1(11%)
+  4-6月|odds<1.35: 4场 主=3(75%) 平=0(0%) 客=1(25%)
+  4-6月|odds>=1.50: 220场 主=62(28%) 平=63(29%) 客=95(43%)
+  其他月|1.35-1.50: 28场 主=23(82%) 平=4(14%) 客=1(4%)
+  其他月|odds<1.35: 11场 主=9(82%) 平=1(9%) 客=1(9%)
+  其他月|odds>=1.50: 770场 主=222(29%) 平=212(28%) 客=336(44%)
+
+  === 4. 对比组: 非不对称的低赔率比赛(odds<1.35) ===
+  总体: 379场 主=294(77.6%) 平=59(15.6%) 客=26(6.9%)
+  4-6月: 84场 主=61(72.6%) 平=17(20.2%) 客=6(7.1%)
+  其他月: 295场 主=233(79.0%) 平=42(14.2%) 客=20(6.8%)
+
+  === 5. 核心对比: 动机不对称 vs 非不对称(4-6月, odds<1.35) ===
+  动机不对称(4-6月,odds<1.35): 5场 主=4(80%) 平=0(0%) 客=1(20%)
+  非不对称(4-6月,odds<1.35):    84场 主=61(72.6%) 平=17(20.2%) 客=6(7.1%)
+
+  冷门率: 不对称=1/5=20.0%  非不对称=23/84=27.4%
+  差异: -7.4pp
+
+  === 6. 全部动机不对称候选详情(odds<=1.50, diff<-1.0) ===
+  2023-09-24 Brighton and Hove Albion vs Bournemouth (premier_league)
+    odds=1.38 score=3-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=9
+  2023-12-17 Fiorentina vs Hellas Verona (serie_a)
+    odds=1.44 score=1-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=12
+  2023-12-20 Athletic Bilbao vs Las Palmas (la_liga)
+    odds=1.39 score=1-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=12
+  2024-04-15 Atalanta vs Hellas Verona (serie_a)
+    odds=1.45 score=2-2 actual=draw
+    dead_rubber vs relegation diff=-2.6 month=4
+  2024-05-04 Real Sociedad vs Las Palmas (la_liga)
+    odds=1.35 score=2-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=5
+  2024-05-19 Chelsea vs Bournemouth (premier_league)
+    odds=1.45 score=2-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=5
+  2024-08-23 Paris Saint-Germain vs Montpellier (Ligue 1)
+    odds=1.23 score=6-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=8
+  2024-09-24 Atalanta vs Como (Serie A)
+    odds=1.47 score=2-3 actual=away
+    dead_rubber vs relegation diff=-2.6 month=9
+  2024-09-27 Paris Saint-Germain vs Stade Rennais (Ligue 1)
+    odds=1.38 score=3-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=9
+  2024-10-26 Atalanta vs Hellas Verona (Serie A)
+    odds=1.40 score=6-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=10
+  2024-10-30 Atalanta vs Monza (Serie A)
+    odds=1.31 score=2-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=10
+  2024-11-02 Eintracht Frankfurt vs VfL Bochum (Bundesliga)
+    odds=1.33 score=7-2 actual=home
+    dead_rubber vs relegation diff=-2.6 month=11
+  2024-11-02 Paris Saint-Germain vs RC Lens (Ligue 1)
+    odds=1.43 score=1-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=11
+  2024-11-10 Fiorentina vs Hellas Verona (Serie A)
+    odds=1.45 score=3-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=11
+  2024-11-30 Paris Saint-Germain vs FC Nantes (Ligue 1)
+    odds=1.21 score=1-1 actual=draw
+    dead_rubber vs relegation diff=-2.6 month=11
+  2024-12-14 Borussia Monchengladbach vs Holstein Kiel (Bundesliga)
+    odds=1.44 score=4-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=12
+  2024-12-15 Real Sociedad vs Las Palmas (La Liga)
+    odds=1.42 score=0-0 actual=draw
+    dead_rubber vs relegation diff=-2.6 month=12
+  2024-12-15 Paris Saint-Germain vs Olympique Lyon (Ligue 1)
+    odds=1.40 score=3-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=12
+  2024-12-20 Girona vs Real Valladolid (La Liga)
+    odds=1.39 score=3-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=12
+  2024-12-30 Bologna vs Hellas Verona (Serie A)
+    odds=1.50 score=2-3 actual=away
+    dead_rubber vs relegation diff=-2.6 month=12
+  2025-01-11 SC Freiburg vs Holstein Kiel (Bundesliga)
+    odds=1.39 score=3-2 actual=home
+    dead_rubber vs relegation diff=-2.6 month=1
+  2025-01-24 VfL Wolfsburg vs Holstein Kiel (Bundesliga)
+    odds=1.43 score=2-2 actual=draw
+    dead_rubber vs relegation diff=-2.6 month=1
+  2025-02-07 Rayo Vallecano vs Real Valladolid (La Liga)
+    odds=1.49 score=1-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=2
+  2025-02-07 Paris Saint-Germain vs AS Monaco (Ligue 1)
+    odds=1.40 score=4-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=2
+  2025-02-09 Lazio vs Monza (Serie A)
+    odds=1.36 score=5-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=2
+  2025-02-16 Eintracht Frankfurt vs Holstein Kiel (Bundesliga)
+    odds=1.33 score=3-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=2
+  2025-02-23 Athletic Bilbao vs Real Valladolid (La Liga)
+    odds=1.16 score=7-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=2
+  2025-02-23 OGC Nice vs Montpellier (Ligue 1)
+    odds=1.37 score=2-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=2
+  2025-03-01 Paris Saint-Germain vs Lille (Ligue 1)
+    odds=1.39 score=4-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=3
+  2025-03-08 Valencia vs Real Valladolid (La Liga)
+    odds=1.39 score=2-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=3
+  2025-03-09 Real Betis vs Las Palmas (La Liga)
+    odds=1.45 score=1-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=3
+  2025-03-16 Paris Saint-Germain vs Olympique Marseille (Ligue 1)
+    odds=1.44 score=3-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=3
+  2025-03-29 Real Sociedad vs Real Valladolid (La Liga)
+    odds=1.34 score=2-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=3
+  2025-04-05 1. FSV Mainz 05 vs Holstein Kiel (Bundesliga)
+    odds=1.44 score=1-1 actual=draw
+    dead_rubber vs relegation diff=-2.6 month=4
+  2025-04-23 Athletic Bilbao vs Las Palmas (La Liga)
+    odds=1.36 score=1-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=4
+  2025-04-24 Real Betis vs Real Valladolid (La Liga)
+    odds=1.19 score=5-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=4
+  2025-05-04 Stade Brestois 29 vs Montpellier (Ligue 1)
+    odds=1.36 score=1-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=5
+  2025-05-10 Mallorca vs Real Valladolid (La Liga)
+    odds=1.34 score=2-1 actual=home
+    dead_rubber vs relegation diff=-2.6 month=5
+  2025-05-11 Udinese vs Monza (Serie A)
+    odds=1.48 score=1-2 actual=away
+    dead_rubber vs relegation diff=-2.6 month=5
+  2025-05-24 Espanyol vs Las Palmas (La Liga)
+    odds=1.38 score=2-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=5
+  2025-08-24 Atalanta vs Pisa (serie_a)
+    odds=1.38 score=1-1 actual=draw
+    dead_rubber vs relegation diff=-2.6 month=8
+  2025-08-31 Lazio vs Hellas Verona (Serie A)
+    odds=1.45 score=4-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=8
+  2025-09-14 Paris Saint-Germain vs RC Lens (Ligue 1)
+    odds=1.31 score=2-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=9
+  2025-11-09 Athletic Bilbao vs Oviedo (la_liga)
+    odds=1.48 score=1-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=11
+  2025-12-06 Paris Saint-Germain vs Stade Rennais (Ligue 1)
+    odds=1.28 score=5-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=12
+  2026-01-16 Paris Saint-Germain vs Lille (Ligue 1)
+    odds=1.31 score=3-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=1
+  2026-02-08 Paris Saint-Germain vs Olympique Marseille (Ligue 1)
+    odds=1.39 score=5-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=2
+  2026-02-21 Real Sociedad vs Oviedo (la_liga)
+    odds=1.46 score=3-3 actual=draw
+    dead_rubber vs relegation diff=-2.6 month=2
+  2026-03-06 Paris Saint-Germain vs AS Monaco (Ligue 1)
+    odds=1.34 score=1-3 actual=away
+    dead_rubber vs relegation diff=-2.6 month=3
+  2026-03-22 Atalanta vs Hellas Verona (Serie A)
+    odds=1.37 score=1-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=3
+  2026-04-19 Paris Saint-Germain vs Olympique Lyon (Ligue 1)
+    odds=1.28 score=1-2 actual=away
+    dead_rubber vs relegation diff=-2.6 month=4
+  2026-04-22 Paris Saint-Germain vs FC Nantes (Ligue 1)
+    odds=1.17 score=3-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=4
+  2026-05-23 Mallorca vs Oviedo (la_liga)
+    odds=1.45 score=3-0 actual=home
+    dead_rubber vs relegation diff=-2.6 month=5
+
+======================================================================
+  分析完成
+======================================================================

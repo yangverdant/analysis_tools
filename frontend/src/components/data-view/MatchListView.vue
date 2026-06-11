@@ -108,13 +108,13 @@ export default {
 
     const roundMatches = computed(() => {
       if (selectedRound.value === 'all') return []
-      return matches.value.filter(m => m.round == selectedRound.value)
+      return matches.value.filter(m => m.round_num == selectedRound.value)
     })
 
     const roundGroups = computed(() => {
       const groups = {}
       matches.value.forEach(m => {
-        const r = m.round || 0
+        const r = m.round_num || 0
         if (!groups[r]) {
           groups[r] = { round: r, matches: [], finished: 0, upcoming: 0 }
         }
@@ -151,13 +151,13 @@ export default {
           }
         })
 
-        if (res.data && res.data.data) {
-          matches.value = res.data.data
+        if (res.data && res.data.matches) {
+          matches.value = res.data.matches
 
           // 提取轮次列表
           const roundSet = new Set()
-          res.data.data.forEach(m => {
-            if (m.round) roundSet.add(m.round)
+          res.data.matches.forEach(m => {
+            if (m.round_num) roundSet.add(m.round_num)
           })
           rounds.value = Array.from(roundSet).sort((a, b) => a - b)
         }

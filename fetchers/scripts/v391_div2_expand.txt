@@ -1,0 +1,52 @@
+================================================================================
+  v3.9.1扩展: 全局减draw vs dt30调整, 按联赛对比
+================================================================================
+
+  === v39_div2_dt30 ===
+    总体: 7073/13993=50.55% Brier=0.6033 net=+124
+    杯赛: 856/1890=45.3%
+    五大联赛: 3740/6946=53.8%
+    --- 逐联赛 ---
+      serie_b              335/759= 44.1% draw_pred=  0 prec=0% actual_draw=251
+      la_liga_2            444/924= 48.1% draw_pred=  0 prec=0% actual_draw=269
+      ligue_2              322/685= 47.0% draw_pred=  0 prec=0% actual_draw=181
+      primeira_liga        485/1073= 45.2% draw_pred=  0 prec=0% actual_draw=257
+      premier_league       301/532= 56.6% draw_pred=  0 prec=0% actual_draw=125
+      la_liga              380/666= 57.1% draw_pred=  1 prec=0% actual_draw=169
+      serie_a              231/418= 55.3% draw_pred=  1 prec=0% actual_draw=124
+      bundesliga           1081/2066= 52.3% draw_pred= 23 prec=43% actual_draw=528
+      ligue_1              196/375= 52.3% draw_pred=  0 prec=0% actual_draw=95
+
+  === div2_global_reduce ===
+    总体: 7073/13993=50.55% Brier=0.6033 net=+124
+    杯赛: 856/1890=45.3%
+    五大联赛: 3740/6946=53.8%
+    --- 逐联赛 ---
+      serie_b              335/759= 44.1% draw_pred=  0 prec=0% actual_draw=251
+      la_liga_2            444/924= 48.1% draw_pred=  0 prec=0% actual_draw=269
+      ligue_2              322/685= 47.0% draw_pred=  0 prec=0% actual_draw=181
+      primeira_liga        485/1073= 45.2% draw_pred=  0 prec=0% actual_draw=257
+      premier_league       301/532= 56.6% draw_pred=  0 prec=0% actual_draw=125
+      la_liga              380/666= 57.1% draw_pred=  1 prec=0% actual_draw=169
+      serie_a              231/418= 55.3% draw_pred=  1 prec=0% actual_draw=124
+      bundesliga           1081/2066= 52.3% draw_pred= 23 prec=43% actual_draw=528
+      ligue_1              196/375= 52.3% draw_pred=  0 prec=0% actual_draw=95
+
+  === div2_global_reduce_001 ===
+    总体: 7073/13993=50.55% Brier=0.6032 net=+124
+    杯赛: 856/1890=45.3%
+    五大联赛: 3740/6946=53.8%
+    --- 逐联赛 ---
+      serie_b              335/759= 44.1% draw_pred=  0 prec=0% actual_draw=251
+      la_liga_2            444/924= 48.1% draw_pred=  0 prec=0% actual_draw=269
+      ligue_2              322/685= 47.0% draw_pred=  0 prec=0% actual_draw=181
+      primeira_liga        485/1073= 45.2% draw_pred=  0 prec=0% actual_draw=257
+      premier_league       301/532= 56.6% draw_pred=  0 prec=0% actual_draw=125
+      la_liga              380/666= 57.1% draw_pred=  1 prec=0% actual_draw=169
+      serie_a              231/418= 55.3% draw_pred=  1 prec=0% actual_draw=124
+      bundesliga           1081/2066= 52.3% draw_pred= 23 prec=43% actual_draw=528
+      ligue_1              196/375= 52.3% draw_pred=  0 prec=0% actual_draw=95
+
+================================================================================
+  扩展验证完成
+================================================================================

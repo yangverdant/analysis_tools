@@ -1,0 +1,109 @@
+# Football Tools 统一配置
+# 所有路径相对于项目根目录 d:/football_tools
+
+database:
+  path: data/football_v2.db
+  backup_dir: data/backups
+
+scheduler:
+  timezone: Asia/Shanghai
+  jobs:
+    perceive: "0 6 * * *"       # 6:00 自感知
+    collect: "0 7 * * *"        # 7:00 采集编排
+    classify: "30 8 * * *"      # 8:30 赛事分类
+    analyze: "0 9 * * *"        # 9:00 分析
+    clv_update: "0 14 * * *"    # 14:00 CLV更新
+    fetch_results: "0 6 * * *"  # 6:00 获取赛果(次日)
+    validate: "30 6 * * *"      # 6:30 复盘验证
+
+data_sources:
+  sporttery:
+    base_url: https://webapi.sporttery.cn
+    request_interval: 2
+    priority: 1
+
+  oddsfe:
+    base_url: https://oddsfe.com
+    portal_url: https://portal.oddsfe.com
+    request_interval: 1
+    priority: 1
+    bookmakers: 15
+
+  apifootball:
+    base_url: https://apiv3.apifootball.com
+    request_interval: 2
+    priority: 2
+
+  sportmonks:
+    base_url: https://api.sportmonks.com/v3/football
+    request_interval: 2
+    priority: 1
+
+  football_data_org:
+    base_url: https://api.football-data.org/v4
+    request_interval: 7
+    priority: 2
+
+  deepseek:
+    base_url: https://spanagent.xyz/v1
+    model: deepseek-v4-pro
+    max_tokens: 4096
+    request_interval: 1
+    priority: 10
+
+  anthropic:
+    base_url: https://api.anthropic.com
+    default_model: claude-haiku-4-5-20251001
+    sonnet_model: claude-sonnet-4-6
+    max_tokens: 1024
+    request_interval: 1
+    priority: 1
+
+  thesportsdb:
+    base_url: https://www.thesportsdb.com/api/v1/json/3
+    request_interval: 1
+    priority: 4
+
+  fbref:
+    base_url: https://fbref.com
+    request_interval: 3
+    priority: 7
+
+  scorebat:
+    base_url: https://www.scorebat.com/video-api/v3
+    request_interval: 1
+    priority: 5
+
+  scores_365:
+    base_url: https://webws.365scores.com/web
+    request_interval: 2
+    priority: 6
+
+rapidapi:
+  key_source: rapidapi  # api_keys.yaml中的key名
+  apis:
+    odds_feed:
+      base_url: https://odds-feed.p.rapidapi.com
+    bet365:
+      base_url: https://bet365-api.p.rapidapi.com
+    football_betting_odds:
+      base_url: https://football-betting-odds.p.rapidapi.com
+    flashlive_sports:
+      base_url: https://flashlive-sports.p.rapidapi.com
+
+model:
+  version: "3.9.2"
+  draw_threshold:
+    default: 0.30
+    cup: 0.35
+  cold_upset_zone: [1.25, 1.35]
+  season_end_zone: [1.15, 1.25]
+  cup_odds_threshold: 1.40
+
+paths:
+  data: data
+  logs: logs
+  scripts: scripts
+  fetchers: fetchers
+  world_cup: data/world_cup
+  linkage: data/linkage
