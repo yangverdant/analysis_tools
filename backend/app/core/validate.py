@@ -10,6 +10,7 @@
 
 import json
 import logging
+import os
 import sqlite3
 from datetime import date, timedelta
 from typing import Dict, List
@@ -52,6 +53,13 @@ def validate(state, db_path: str, agent=None) -> dict:
     if not results['sync_results_oddsfe'].get('success') and not results['sync_results_oddsfe_today'].get('success'):
         logger.info('oddsfe结果获取失败, 尝试sporttery备选')
         results['sync'] = _sync_results(db_path, yesterday)
+
+    # Step 1b: 从oddsfe_merged.db回填历史缺失结果
+    results['backfill'] = _backfill_results_from_oddsfe(db_path)
+
+    # Step 1c: 从unified_football.db回填(备选源)
+    if not results['backfill'].get('backfilled'):
+        results['backfill_unified'] = _backfill_results_from_unified(db_path)
 
     # Step 2: 确定需要验证的日期范围(含历史回填)
     match_dates = _find_unvalidated_dates(db_path, [yesterday, today])
@@ -209,7 +217,10 @@ def _sync_results_oddsfe(db_path: str, match_date: str) -> dict:
 
 
 def _validate_predictions(db_path: str, match_dates: list) -> dict:
-    """验证预测 — 从lottery_analysis_reports取预测，对比lottery_results"""
+    """验证预测 — 从lottery_analysis_reports取预测，对比lottery_results
+
+    支持回填模式：如果match_dates为空，则验证所有有结果但未验证的比赛。
+    """
     validated = 0
     correct_count = 0
 
@@ -218,8 +229,15 @@ def _validate_predictions(db_path: str, match_dates: list) -> dict:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        # 获取指定日期有预测+有结果的比赛
-        placeholders = ','.join(['?'] * len(match_dates))
+        if match_dates:
+            placeholders = ','.join(['?'] * len(match_dates))
+            date_filter = f"WHERE lm.match_date IN ({placeholders})"
+            params = match_dates
+        else:
+            # 回填模式：验证所有有结果但未验证的
+            date_filter = ""
+            params = []
+
         cursor.execute(f"""
             SELECT ar.lottery_match_id, ar.report_data,
                    lm.home_team_cn, lm.away_team_cn, lm.league_name_cn,
@@ -227,9 +245,10 @@ def _validate_predictions(db_path: str, match_dates: list) -> dict:
             FROM lottery_analysis_reports ar
             JOIN lottery_matches lm ON ar.lottery_match_id = lm.lottery_match_id
             JOIN lottery_results lr ON ar.lottery_match_id = lr.lottery_match_id
-            WHERE lm.match_date IN ({placeholders})
+            {date_filter}
             AND ar.report_type IN ('prediction', 'full')
-        """, match_dates)
+            GROUP BY ar.lottery_match_id
+        """, params)
 
         rows = cursor.fetchall()
 
@@ -237,84 +256,277 @@ def _validate_predictions(db_path: str, match_dates: list) -> dict:
             try:
                 report = json.loads(row['report_data']) if isinstance(row['report_data'], str) else row['report_data']
 
-                # Extract prediction from either 'prediction' or 'full' report format
-                final = report.get('final_prediction', {})
-                if not final and 'analyses' in report:
-                    # 'full' report format: analyses.spf.probabilities/recommendation
+                # Extract prediction — support multiple report formats
+                predicted = ''
+                probabilities = {}
+                confidence = 0
+                confidence_level = 'low'
+
+                # Format 1: final_prediction.predicted_result
+                fp = report.get('final_prediction', {})
+                if fp.get('predicted_result'):
+                    predicted = fp['predicted_result']
+                    probabilities = fp.get('probabilities', {})
+                    confidence = fp.get('confidence', 0)
+                    confidence_level = fp.get('confidence_level', 'low')
+
+                # Format 2: analyses.spf.recommendation
+                if not predicted:
                     spf = report.get('analyses', {}).get('spf', {})
-                    if spf.get('probabilities') or spf.get('recommendation'):
-                        final = {
-                            'probabilities': spf.get('probabilities', {}),
-                            'predicted_result': spf.get('recommendation', ''),
-                            'recommended': spf.get('recommendation', ''),
-                            'confidence': spf.get('confidence', 'medium'),
-                        }
-                if not final and 'recommendations' in report:
-                    # Another variant: top-level recommendations
-                    rec = report.get('recommendations', {})
-                    final = {
-                        'predicted_result': rec.get('spf', {}).get('recommendation', ''),
-                        'recommended': rec.get('spf', {}).get('recommendation', ''),
-                        'probabilities': rec.get('spf', {}).get('probabilities', {}),
-                        'confidence': rec.get('spf', {}).get('confidence', 'medium'),
-                    }
+                    if spf.get('recommendation'):
+                        predicted = spf['recommendation']
+                        probabilities = spf.get('probabilities', {})
+                        confidence = spf.get('confidence', 0)
+                        confidence_level = spf.get('confidence_level', 'low')
 
-                # Support both 'predicted_result' and 'recommended' keys
-                recommended = final.get('predicted_result', '') or final.get('recommended', '')
-                # Translate Chinese recommendations to English keys
-                if recommended in CN_RESULT_MAP:
-                    recommended = {'3': 'home_win', '1': 'draw', '0': 'away_win'}[CN_RESULT_MAP[recommended]]
-                probabilities = final.get('probabilities', {})
-                confidence = final.get('confidence', 'medium')
+                # Format 3: recommendations.spf
+                if not predicted:
+                    rec = report.get('recommendations', {}).get('spf', {})
+                    if rec.get('recommendation'):
+                        predicted = rec['recommendation']
+                        probabilities = rec.get('probabilities', {})
+                        confidence = rec.get('confidence', 0)
 
-                # 如果recommended为空, 从probabilities推导
-                if not recommended and probabilities:
-                    recommended = max(probabilities, key=probabilities.get)
+                # Translate Chinese recommendations
+                if predicted in CN_RESULT_MAP:
+                    predicted = {'3': 'home_win', '1': 'draw', '0': 'away_win'}[CN_RESULT_MAP[predicted]]
+
+                # If still no prediction, derive from probabilities
+                if not predicted and probabilities:
+                    predicted = max(probabilities, key=probabilities.get)
+
+                if not predicted:
+                    continue
 
                 actual = row['spf_result']
-                if not actual or not recommended:
-                    continue
 
-                pred_code = RESULT_MAP.get(recommended, '')
-                if not pred_code:
-                    continue
+                # Map result labels to SPF codes
+                predicted_spf = RESULT_MAP.get(predicted, predicted)
 
-                is_correct = (pred_code == actual)
-                pred_prob = max(probabilities.values()) if probabilities else 0.5
-
-                # 计算Brier score
-                brier = _compute_brier(probabilities, actual)
-
-                # 写入lottery_validation
-                scenario = _determine_scenario(row['league_name_cn'])
-                _save_validation(conn, {
-                    'lottery_match_id': row['lottery_match_id'],
-                    'play_type': 'spf',
-                    'predicted_result': pred_code,
-                    'actual_result': actual,
-                    'is_correct': int(is_correct),
-                    'predicted_prob': pred_prob,
-                    'brier_score': brier,
-                    'scenario_type': scenario,
-                })
-
-                validated += 1
+                is_correct = (predicted_spf == actual)
                 if is_correct:
                     correct_count += 1
 
+                # Compute Brier score
+                brier = _compute_brier(probabilities, actual)
+
+                # Determine scenario
+                scenario = _determine_scenario(row['league_name_cn'])
+
+                # Save validation
+                # predicted_prob: highest probability for predicted outcome
+                pred_prob = probabilities.get(predicted, 0) if isinstance(probabilities, dict) else 0
+                validation = {
+                    'lottery_match_id': row['lottery_match_id'],
+                    'play_type': 'spf',
+                    'predicted_result': predicted_spf,
+                    'actual_result': actual,
+                    'is_correct': is_correct,
+                    'confidence': confidence,
+                    'confidence_level': confidence_level,
+                    'brier_score': brier,
+                    'scenario_type': scenario,
+                    'probabilities': probabilities,
+                    'predicted_prob': pred_prob,
+                    'home_goals': row['home_goals_ft'],
+                    'away_goals': row['away_goals_ft'],
+                }
+
+                _save_validation(conn, validation)
+                validated += 1
+
             except Exception as e:
-                logger.debug('验证单场失败 %s: %s', row['lottery_match_id'], e)
+                logger.debug(f'验证失败 {row["lottery_match_id"]}: {e}')
 
         conn.commit()
         conn.close()
 
     except Exception as e:
-        logger.error('验证服务失败: %s', e)
+        logger.error(f'预测验证失败: {e}')
+        return {'validated': validated, 'correct': correct_count, 'error': str(e)}
 
-    accuracy = round(correct_count / validated, 4) if validated > 0 else 0
-    logger.info('验证统计: %d场, 正确%d场, 准确率%.1f%%', validated, correct_count, accuracy * 100)
+    accuracy = round(correct_count / validated * 100, 1) if validated > 0 else 0
+    logger.info(f'验证完成: {validated}场, {correct_count}场正确, 准确率{accuracy}%')
 
-    return {'validated': validated, 'correct': correct_count, 'accuracy': accuracy}
+    return {
+        'validated': validated,
+        'correct': correct_count,
+        'accuracy': accuracy,
+    }
+
+
+def _backfill_results_from_oddsfe(db_path: str) -> dict:
+    """从oddsfe_merged.db回填历史缺失结果 — 解决odds/results管道缺口
+
+    对每个缺少结果的lottery_match，通过队名+日期在oddsfe中找到已完成比赛，
+    写入lottery_results。使用内存索引加速匹配。
+    """
+    from pathlib import Path
+    import re
+
+    oddsfe_path = str(Path(db_path).parent / 'oddsfe_merged.db')
+    if not Path(oddsfe_path).exists():
+        return {'status': 'skipped', 'reason': 'no oddsfe db'}
+
+    def _simple_normalize(name: str) -> str:
+        """简单队名归一化"""
+        n = name.strip()
+        for suffix in [' FC', ' CF', ' SC', ' AFC', ' United', ' City',
+                        ' Hotspur', ' Athletic', ' County', ' Town',
+                        ' Rovers', ' Villa', ' Albion', ' Forest', ' Palace',
+                        ' Rangers', ' Celtic', ' Wanderers']:
+            if n.endswith(suffix):
+                n = n[:-len(suffix)]
+                break
+        return n.strip().lower()
+
+    try:
+        dst = sqlite3.connect(db_path, timeout=10)
+        dst.row_factory = sqlite3.Row
+        cursor = dst.cursor()
+
+        # 查找缺少结果的已关闭比赛
+        cursor.execute("""
+            SELECT lm.lottery_match_id, lm.match_date,
+                   lm.home_team_cn, lm.away_team_cn,
+                   ht.name_en as home_en, at.name_en as away_en
+            FROM lottery_matches lm
+            LEFT JOIN teams ht ON lm.home_team_id = ht.team_id
+            LEFT JOIN teams at ON lm.away_team_id = at.team_id
+            WHERE lm.lottery_match_id NOT IN (
+                SELECT DISTINCT lottery_match_id FROM lottery_results
+            )
+            AND lm.sell_status = 'closed'
+            ORDER BY lm.match_date
+        """)
+        missing = [dict(r) for r in cursor.fetchall()]
+
+        if not missing:
+            dst.close()
+            return {'status': 'ok', 'backfilled': 0}
+
+        # 加载中英队名映射
+        cn_to_en = {}
+        linkage_dir = str(Path(db_path).parent / 'linkage')
+        cn_file = os.path.join(linkage_dir, 'team_chinese_names.json')
+        if os.path.exists(cn_file):
+            try:
+                with open(cn_file, 'r', encoding='utf-8') as f:
+                    en_to_cn = json.load(f)
+                    cn_to_en = {v: k for k, v in en_to_cn.items()}
+            except Exception:
+                pass
+
+        # 从oddsfe加载所有已完赛比赛到内存索引
+        src = sqlite3.connect(oddsfe_path, timeout=30)
+        logger.info('Loading oddsfe finished matches for backfill...')
+        oddsfe_index = {}  # (norm_home, norm_away, date_window) → (score_home, score_away, winner)
+        count = 0
+        for row in src.execute("""
+            SELECT team_home_name, team_away_name,
+                   event_score_home, event_score_away, event_winner,
+                   event_start_at
+            FROM oddsfe
+            WHERE event_status = 'FINISHED'
+        """):
+            h_name, a_name, s_h, s_a, winner, start_at = row
+            norm_h = _simple_normalize(h_name or '')
+            norm_a = _simple_normalize(a_name or '')
+            # 日期窗口: 提取UTC日期(±1天对应北京时区偏移)
+            if start_at:
+                date_window = start_at[:10]  # YYYY-MM-DD
+            else:
+                date_window = None
+            key = (norm_h, norm_a, date_window)
+            # 只保留最近的结果(同队名同日期可能有多场)
+            if key not in oddsfe_index:
+                oddsfe_index[key] = (s_h, s_a, winner)
+            # 也存储精确名匹配
+            exact_key = ((h_name or '').strip().lower(), (a_name or '').strip().lower(), date_window)
+            if exact_key not in oddsfe_index:
+                oddsfe_index[exact_key] = (s_h, s_a, winner)
+            count += 1
+
+        src.close()
+        logger.info(f'Loaded {count} oddsfe matches, {len(oddsfe_index)} unique keys')
+
+        backfilled = 0
+        winner_to_spf = {'0': '3', '1': '1', '2': '0'}
+
+        for lm in missing:
+            home_en = lm.get('home_en')
+            away_en = lm.get('away_en')
+
+            if not home_en and lm['home_team_cn'] in cn_to_en:
+                home_en = cn_to_en[lm['home_team_cn']]
+            if not away_en and lm['away_team_cn'] in cn_to_en:
+                away_en = cn_to_en[lm['away_team_cn']]
+
+            match_date = lm['match_date']
+
+            if not home_en or not away_en:
+                continue
+
+            # 尝试多种匹配方式 — ±3天覆盖(体彩日期可能与oddsfe UTC日期差2-3天)
+            result = None
+            for day_offset in range(-3, 4):
+                from datetime import timedelta, date as date_cls
+                try:
+                    d = date_cls.fromisoformat(match_date) + timedelta(days=day_offset)
+                except ValueError:
+                    continue
+                d_window = str(d)
+
+                # 精确名匹配
+                key1 = (home_en.strip().lower(), away_en.strip().lower(), d_window)
+                if key1 in oddsfe_index:
+                    result = oddsfe_index[key1]
+                    break
+
+                # 归一化名匹配
+                key2 = (_simple_normalize(home_en), _simple_normalize(away_en), d_window)
+                if key2 in oddsfe_index:
+                    result = oddsfe_index[key2]
+                    break
+
+            if result:
+                try:
+                    home_goals = int(result[0]) if result[0] is not None else None
+                    away_goals = int(result[1]) if result[1] is not None else None
+                    winner = str(result[2])
+
+                    if home_goals is None or away_goals is None:
+                        continue
+
+                    spf = winner_to_spf.get(winner)
+                    if not spf:
+                        if home_goals > away_goals:
+                            spf = '3'
+                        elif home_goals == away_goals:
+                            spf = '1'
+                        else:
+                            spf = '0'
+
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO lottery_results
+                        (lottery_match_id, home_goals_ft, away_goals_ft, spf_result)
+                        VALUES (?, ?, ?, ?)
+                    """, (lm['lottery_match_id'], home_goals, away_goals, spf))
+                    backfilled += 1
+                except Exception as e:
+                    logger.debug(f'回填失败 {lm["lottery_match_id"]}: {e}')
+
+        dst.commit()
+        dst.close()
+
+        if backfilled > 0:
+            logger.info(f'oddsfe结果回填: {backfilled}场')
+
+        return {'status': 'ok', 'backfilled': backfilled}
+
+    except Exception as e:
+        logger.error(f'oddsfe结果回填失败: {e}')
+        return {'status': 'error', 'error': str(e)}
 
 
 def _determine_scenario(league_name_cn: str) -> str:
@@ -735,6 +947,161 @@ def _settle_bets(db_path: str) -> dict:
         return {'settled': 0}
 
     return {'settled': settled, 'wins': wins, 'profit': round(total_profit, 2)}
+
+
+def _backfill_results_from_unified(db_path: str) -> dict:
+    """从unified_football.db回填缺失结果 — 备选源
+
+    unified_football.db有14K已完成比赛+比分，通过队名+日期匹配。
+    """
+    from pathlib import Path
+
+    unified_path = str(Path(db_path).parent / 'unified_football.db')
+    if not Path(unified_path).exists():
+        return {'status': 'skipped', 'reason': 'no unified db'}
+
+    def _simple_normalize(name: str) -> str:
+        n = name.strip()
+        for suffix in [' FC', ' CF', ' SC', ' AFC', ' United', ' City',
+                        ' Hotspur', ' Athletic', ' County', ' Town',
+                        ' Rovers', ' Villa', ' Albion', ' Forest', ' Palace',
+                        ' Rangers', ' Celtic', ' Wanderers']:
+            if n.endswith(suffix):
+                n = n[:-len(suffix)]
+                break
+        return n.strip().lower()
+
+    try:
+        dst = sqlite3.connect(db_path, timeout=10)
+        dst.row_factory = sqlite3.Row
+        cursor = dst.cursor()
+
+        cursor.execute("""
+            SELECT lm.lottery_match_id, lm.match_date,
+                   lm.home_team_cn, lm.away_team_cn,
+                   ht.name_en as home_en, at.name_en as away_en
+            FROM lottery_matches lm
+            LEFT JOIN teams ht ON lm.home_team_id = ht.team_id
+            LEFT JOIN teams at ON lm.away_team_id = at.team_id
+            WHERE lm.lottery_match_id NOT IN (
+                SELECT DISTINCT lottery_match_id FROM lottery_results
+            )
+            AND lm.sell_status = 'closed'
+            ORDER BY lm.match_date
+        """)
+        missing = [dict(r) for r in cursor.fetchall()]
+
+        if not missing:
+            dst.close()
+            return {'status': 'ok', 'backfilled': 0}
+
+        # 加载中英队名映射
+        cn_to_en = {}
+        linkage_dir = str(Path(db_path).parent / 'linkage')
+        cn_file = os.path.join(linkage_dir, 'team_chinese_names.json')
+        if os.path.exists(cn_file):
+            try:
+                with open(cn_file, 'r', encoding='utf-8') as f:
+                    en_to_cn = json.load(f)
+                    cn_to_en = {v: k for k, v in en_to_cn.items()}
+            except Exception:
+                pass
+
+        # 从unified_football.db加载已完成比赛
+        src = sqlite3.connect(unified_path, timeout=30)
+        logger.info('Loading unified_football.db finished matches for backfill...')
+        unified_index = {}  # (norm_home, norm_away, date) → (home_score, away_score)
+        count = 0
+        for row in src.execute("""
+            SELECT home_team, away_team, date, home_score, away_score
+            FROM matches WHERE status = 'finished' AND home_score IS NOT NULL
+        """):
+            h_name, a_name, m_date, h_score, a_score = row
+            if not h_name or not a_name or not m_date:
+                continue
+            norm_h = _simple_normalize(h_name)
+            norm_a = _simple_normalize(a_name)
+            key = (norm_h, norm_a, m_date)
+            if key not in unified_index:
+                unified_index[key] = (h_score, a_score)
+            # Also exact name match
+            exact_key = (h_name.strip().lower(), a_name.strip().lower(), m_date)
+            if exact_key not in unified_index:
+                unified_index[exact_key] = (h_score, a_score)
+            count += 1
+
+        src.close()
+        logger.info(f'Loaded {count} unified matches, {len(unified_index)} unique keys')
+
+        backfilled = 0
+        for lm in missing:
+            home_en = lm.get('home_en')
+            away_en = lm.get('away_en')
+
+            if not home_en and lm['home_team_cn'] in cn_to_en:
+                home_en = cn_to_en[lm['home_team_cn']]
+            if not away_en and lm['away_team_cn'] in cn_to_en:
+                away_en = cn_to_en[lm['away_team_cn']]
+
+            match_date = lm['match_date']
+
+            if not home_en or not away_en:
+                continue
+
+            # 尝试±3天日期窗口
+            result = None
+            for day_offset in range(-3, 4):
+                from datetime import timedelta, date as date_cls
+                try:
+                    d = date_cls.fromisoformat(match_date) + timedelta(days=day_offset)
+                except ValueError:
+                    continue
+                d_str = str(d)
+
+                key1 = (home_en.strip().lower(), away_en.strip().lower(), d_str)
+                if key1 in unified_index:
+                    result = unified_index[key1]
+                    break
+
+                key2 = (_simple_normalize(home_en), _simple_normalize(away_en), d_str)
+                if key2 in unified_index:
+                    result = unified_index[key2]
+                    break
+
+            if result:
+                try:
+                    home_goals = int(result[0]) if result[0] is not None else None
+                    away_goals = int(result[1]) if result[1] is not None else None
+                    if home_goals is None or away_goals is None:
+                        continue
+
+                    if home_goals > away_goals:
+                        spf = '3'
+                    elif home_goals == away_goals:
+                        spf = '1'
+                    else:
+                        spf = '0'
+
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO lottery_results
+                        (lottery_match_id, home_goals_ft, away_goals_ft, spf_result)
+                        VALUES (?, ?, ?, ?)
+                    """, (lm['lottery_match_id'], home_goals, away_goals, spf))
+                    backfilled += 1
+                except Exception as e:
+                    logger.debug(f'回填失败 {lm["lottery_match_id"]}: {e}')
+
+        dst.commit()
+        dst.close()
+
+        if backfilled > 0:
+            logger.info(f'unified结果回填: {backfilled}场')
+
+        return {'status': 'ok', 'backfilled': backfilled}
+
+    except Exception as e:
+        logger.error(f'unified结果回填失败: {e}')
+        return {'status': 'error', 'error': str(e)}
 
 
 def _sync_oddsfe_before_validate(db_path: str) -> dict:
