@@ -61,6 +61,9 @@ def validate(state, db_path: str, agent=None) -> dict:
     if not results['backfill'].get('backfilled'):
         results['backfill_unified'] = _backfill_results_from_unified(db_path)
 
+    # Step 1d: 从CSV补充开盘赔率(Pinnacle/B365)
+    results['csv_odds_sync'] = _sync_csv_opening_odds(db_path)
+
     # Step 2: 确定需要验证的日期范围(含历史回填)
     match_dates = _find_unvalidated_dates(db_path, [yesterday, today])
 
@@ -1101,6 +1104,19 @@ def _backfill_results_from_unified(db_path: str) -> dict:
 
     except Exception as e:
         logger.error(f'unified结果回填失败: {e}')
+        return {'status': 'error', 'error': str(e)}
+
+
+def _sync_csv_opening_odds(db_path: str) -> dict:
+    """从unified_football.db同步CSV开盘赔率到lottery_odds"""
+    try:
+        from scripts.sync_csv_opening_odds import sync_csv_opening_odds
+        return sync_csv_opening_odds(football_v2_path=db_path)
+    except ImportError:
+        logger.debug('CSV开盘赔率同步脚本不可用')
+        return {'status': 'skipped', 'reason': 'sync script not available'}
+    except Exception as e:
+        logger.debug(f'CSV开盘赔率同步失败: {e}')
         return {'status': 'error', 'error': str(e)}
 
 
