@@ -643,16 +643,15 @@ def _attribute_failures(db_path: str, match_dates: list, agent=None) -> dict:
                 except Exception as e:
                     logger.debug(f'Agent归因失败 {failure.get("lottery_match_id")}: {e}')
 
-            # 更新lottery_validation归因字段
+            # 更新lottery_validation归因字段(不覆盖scenario_type)
             cursor.execute("""
                 UPDATE lottery_validation
-                SET attribution = ?, attribution_detail = ?, scenario_type = ?,
+                SET attribution = ?, attribution_detail = ?,
                     actionable = ?
                 WHERE lottery_match_id = ? AND play_type = ?
             """, (
                 attribution['level'],
                 attribution.get('suggested_action', attribution['detail']),
-                attribution['scenario'],
                 attribution.get('actionable', 0),
                 failure.get('lottery_match_id'),
                 failure.get('play_type', 'spf'),
