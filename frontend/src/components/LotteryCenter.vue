@@ -258,7 +258,7 @@ const LotteryAnalysisDetail = defineComponent({
       if (!props.match?.lottery_match_id) return
       loading.value = true
       try {
-        const response = await fetch(`http://localhost:18888/api/v1/lottery/report/${props.match.lottery_match_id}`)
+        const response = await fetch(`/api/v1/lottery/report/${props.match.lottery_match_id}`)
         if (response.ok) {
           const data = await response.json()
           report.value = data.report
@@ -963,7 +963,7 @@ export default {
       loading.value = true
       try {
         const dateStr = formatDate(selectedDate.value)
-        const response = await fetch(`http://localhost:18888/api/v1/lottery/matches?date=${dateStr}`)
+        const response = await fetch(`/api/v1/lottery/matches?date=${dateStr}`)
         const data = await response.json()
         matches.value = data.matches || []
 
@@ -984,7 +984,7 @@ export default {
 
     const fetchAccuracyData = async () => {
       try {
-        const response = await fetch('http://localhost:18888/api/v1/lottery/accuracy?days=30')
+        const response = await fetch('/api/v1/lottery/accuracy?days=30')
         if (response.ok) {
           const data = await response.json()
           accuracyData.value = {
@@ -1018,7 +1018,7 @@ export default {
 
     const analyzeMatch = async (match) => {
       try {
-        const response = await fetch(`http://localhost:18888/api/v1/lottery/analyze/${match.lottery_match_id}`, {
+        const response = await fetch(`/api/v1/lottery/analyze/${match.lottery_match_id}`, {
           method: 'POST'
         })
         const data = await response.json()

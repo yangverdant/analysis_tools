@@ -112,7 +112,7 @@ export default {
       loading.value = true
       try {
         const response = await fetch(
-          `http://localhost:18888/api/v1/lottery/value-bets/${props.matchId}`
+          `/api/v1/lottery/value-bets/${props.matchId}`
         )
         const data = await response.json()
         if (data.success && data.value_bets) {

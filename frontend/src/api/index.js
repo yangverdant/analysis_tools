@@ -699,3 +699,47 @@ export const trackingAPI = {
   // 执行完整闭环学习周期
   runFullCycle: () => fetchAPI('/analytics/tracking/run-full-cycle', { method: 'POST' })
 }
+
+// 日循环相关
+export const cycleAPI = {
+  // 获取日循环状态
+  getStatus: () => fetch('/api/cycle/status').then(r => r.json()),
+
+  // 获取今日预测
+  getPredictions: (date = null) => {
+    const query = date ? `?date=${date}` : ''
+    return fetch(`/api/cycle/predictions${query}`).then(r => r.json())
+  },
+
+  // 获取TOP3价值投注
+  getTop3: () => fetch('/api/cycle/top3').then(r => r.json()),
+
+  // 手动触发日循环
+  run: (mode) => fetch(`/api/cycle/run/${mode}`, { method: 'POST' }).then(r => r.json()),
+
+  // 获取调度器状态
+  getSchedulerStatus: () => fetch('/api/scheduler/status').then(r => r.json()),
+}
+
+// 投注ROI相关
+export const betsAPI = {
+  // 获取ROI统计
+  getROI: () => fetch('/api/bets/roi').then(r => r.json()),
+
+  // 手动结算
+  settle: () => fetch('/api/bets/settle', { method: 'POST' }).then(r => r.json()),
+}
+
+// 回测相关
+export const backtestAPI = {
+  // 运行回测
+  run: (days = 30, stake = 100) => fetch(`/api/backtest?days=${days}&stake=${stake}`).then(r => r.json()),
+
+  // oddsfe回测结果
+  getOddsfeResults: () => fetch('/api/oddsfe-backtest').then(r => r.json()),
+}
+
+// 准确率趋势
+export const accuracyTrendAPI = {
+  get: (days = 30) => fetch(`/api/accuracy_trend?days=${days}`).then(r => r.json()),
+}

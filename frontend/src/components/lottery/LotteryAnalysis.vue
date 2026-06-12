@@ -368,7 +368,7 @@ export default {
       loading.value = true
       try {
         const response = await fetch(
-          `http://localhost:18888/api/v1/lottery/report/${props.match.lottery_match_id}`
+          `/api/v1/lottery/report/${props.match.lottery_match_id}`
         )
         const data = await response.json()
         if (data.success) {

@@ -245,7 +245,7 @@ export default {
     const startAutoSync = async () => {
       try {
         syncStatus.value = { status: 'syncing', message: '正在同步数据...' }
-        const response = await fetch('http://localhost:18888/api/v1/sync/start', {
+        const response = await fetch('/api/v1/sync/start', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' }
         })

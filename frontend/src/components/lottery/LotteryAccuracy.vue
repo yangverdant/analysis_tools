@@ -158,7 +158,7 @@ export default {
       loading.value = true
       try {
         const response = await fetch(
-          `http://localhost:18888/api/v1/lottery/accuracy?days=${selectedPeriod.value}`
+          `/api/v1/lottery/accuracy?days=${selectedPeriod.value}`
         )
         const data = await response.json()
         if (data.success) {
