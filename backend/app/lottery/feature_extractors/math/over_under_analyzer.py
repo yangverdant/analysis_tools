@@ -38,7 +38,7 @@ class OverUnderAnalyzer(FeatureExtractor):
 
     @property
     def play_type(self) -> PlayType:
-        return PlayType.SPF  # 关联胜平负
+        return PlayType.OVER_UNDER
 
     def get_required_data(self) -> list:
         return ['home_team_id', 'away_team_id', 'match_date']

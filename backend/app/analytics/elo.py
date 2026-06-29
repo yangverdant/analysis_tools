@@ -16,7 +16,7 @@ class EloAnalyzer:
 
     # 默认参数
     DEFAULT_ELO = 1500
-    K_FACTOR = 32  # 评分调整系数
+    K_FACTOR = 20  # 足球标准K值(32过大会导致评分波动过大)
     HOME_ADVANTAGE = 100  # 主场优势（Elo加分）
     SCALE_FACTOR = 400  # Elo尺度因子
 
@@ -265,8 +265,7 @@ class EloAnalyzer:
         """
         基于Elo预测比赛结果概率
 
-        Returns:
-            包含胜平负概率的预测结果
+        使用Sigmoid模型计算draw概率: 差值小→draw概率高, 差值大→draw概率低
         """
         if conn is None:
             conn = self.get_connection()
@@ -274,25 +273,7 @@ class EloAnalyzer:
         home_elo = self.get_team_elo(home_team_id, conn)
         away_elo = self.get_team_elo(away_team_id, conn)
 
-        # 主场优势调整后的预期胜率
-        home_expected = self.calculate_expected_score(
-            home_elo + self.HOME_ADVANTAGE, away_elo
-        )
-        away_expected = self.calculate_expected_score(
-            away_elo, home_elo + self.HOME_ADVANTAGE
-        )
-
-        # 简化模型：平局概率约为 (1 - home_expected - away_expected) / 2 的调整
-        # 更精确的模型需要考虑平局的独立概率
-        draw_probability = 1 - home_expected - away_expected
-        if draw_probability < 0:
-            draw_probability = 0.25  # 默认平局概率
-
-        # 标准化概率
-        total = home_expected + draw_probability + away_expected
-        home_win_prob = home_expected / total
-        draw_prob = draw_probability / total
-        away_win_prob = away_expected / total
+        probs = self._elo_probabilities(home_elo, away_elo)
 
         return {
             'home_team_id': home_team_id,
@@ -301,13 +282,34 @@ class EloAnalyzer:
             'away_elo': round(away_elo, 2),
             'home_elo_adjusted': round(home_elo + self.HOME_ADVANTAGE, 2),
             'elo_diff': round(home_elo - away_elo, 2),
-            'predictions': {
-                'home_win': round(home_win_prob, 3),
-                'draw': round(draw_prob, 3),
-                'away_win': round(away_win_prob, 3)
-            },
-            'expected_home_score': round(home_expected, 3),
-            'expected_away_score': round(away_expected, 3)
+            'predictions': probs,
+            'expected_home_score': round(probs['home_win'], 3),
+            'expected_away_score': round(probs['away_win'], 3)
+        }
+
+    def _elo_probabilities(self, home_elo: float, away_elo: float, home_advantage: int = None) -> Dict:
+        """Elo→三维概率(Sigmoid draw模型)
+
+        draw概率 = draw_base × exp(-|rating_diff| / 600)
+        差值0→draw≈26%, 差值200→draw≈14%, 差值400→draw≈7%
+        """
+        if home_advantage is None:
+            home_advantage = self.HOME_ADVANTAGE
+        rating_diff = (home_elo + home_advantage) - away_elo
+        expected = 1 / (1 + 10 ** (-rating_diff / self.SCALE_FACTOR))
+
+        draw_base = 0.26
+        draw_factor = math.exp(-abs(rating_diff) / 600)
+        draw_prob = draw_base * draw_factor
+
+        home_prob = expected * (1 - draw_prob)
+        away_prob = (1 - expected) * (1 - draw_prob)
+
+        total = home_prob + draw_prob + away_prob
+        return {
+            'home_win': round(home_prob / total, 4),
+            'draw': round(draw_prob / total, 4),
+            'away_win': round(away_prob / total, 4),
         }
 
     def recalculate_all_elo(

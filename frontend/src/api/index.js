@@ -14,6 +14,24 @@ async function fetchAPI(endpoint, options = {}) {
   return response.json()
 }
 
+function buildQuery(params = {}) {
+  const query = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === '') return
+    if (Array.isArray(value)) {
+      value.forEach(item => {
+        if (item !== undefined && item !== null && item !== '') {
+          query.append(key, item)
+        }
+      })
+      return
+    }
+    query.append(key, value)
+  })
+  const text = query.toString()
+  return text ? `?${text}` : ''
+}
+
 // 联赛相关
 export const leagueAPI = {
   // 获取联赛列表
@@ -703,43 +721,491 @@ export const trackingAPI = {
 // 日循环相关
 export const cycleAPI = {
   // 获取日循环状态
-  getStatus: () => fetch('/api/cycle/status').then(r => r.json()),
+  getStatus: () => fetchAPI('/cycle/status'),
 
   // 获取今日预测
   getPredictions: (date = null) => {
     const query = date ? `?date=${date}` : ''
-    return fetch(`/api/cycle/predictions${query}`).then(r => r.json())
+    return fetchAPI(`/cycle/predictions${query}`)
   },
 
   // 获取TOP3价值投注
-  getTop3: () => fetch('/api/cycle/top3').then(r => r.json()),
+  getTop3: () => fetchAPI('/cycle/top3'),
 
   // 手动触发日循环
-  run: (mode) => fetch(`/api/cycle/run/${mode}`, { method: 'POST' }).then(r => r.json()),
+  run: (mode) => fetchAPI(`/cycle/run/${mode}`, { method: 'POST' }),
 
   // 获取调度器状态
   getSchedulerStatus: () => fetch('/api/scheduler/status').then(r => r.json()),
+
+  // 暂停自动调度
+  pauseScheduler: () => fetch('/api/scheduler/pause', { method: 'POST' }).then(r => r.json()),
+
+  // 恢复自动调度
+  resumeScheduler: () => fetch('/api/scheduler/resume', { method: 'POST' }).then(r => r.json()),
+
+  // 立即触发调度任务
+  runSchedulerJob: (jobId) => fetch(`/api/scheduler/run/${jobId}`, { method: 'POST' }).then(r => r.json()),
 }
 
 // 投注ROI相关
 export const betsAPI = {
   // 获取ROI统计
-  getROI: () => fetch('/api/bets/roi').then(r => r.json()),
+  getROI: () => fetchAPI('/bets/roi'),
 
   // 手动结算
-  settle: () => fetch('/api/bets/settle', { method: 'POST' }).then(r => r.json()),
+  settle: () => fetchAPI('/bets/settle', { method: 'POST' }),
 }
 
 // 回测相关
 export const backtestAPI = {
   // 运行回测
-  run: (days = 30, stake = 100) => fetch(`/api/backtest?days=${days}&stake=${stake}`).then(r => r.json()),
+  run: (days = 30, stake = 100) => fetchAPI(`/backtest?days=${days}&stake=${stake}`),
 
   // oddsfe回测结果
-  getOddsfeResults: () => fetch('/api/oddsfe-backtest').then(r => r.json()),
+  getOddsfeResults: () => fetchAPI('/oddsfe-backtest'),
 }
 
 // 准确率趋势
 export const accuracyTrendAPI = {
-  get: (days = 30) => fetch(`/api/accuracy_trend?days=${days}`).then(r => r.json()),
+  get: (days = 30) => fetchAPI(`/accuracy_trend?days=${days}`),
+}
+
+// 用户设置与收藏
+export const userAPI = {
+  // 设置
+  getSettings: () => fetchAPI('/user/settings'),
+  saveSettings: (settings) => fetchAPI('/user/settings', {
+    method: 'POST',
+    body: JSON.stringify({ settings })
+  }),
+  // 收藏
+  getFavorites: (itemType = null) => {
+    const query = itemType ? `?item_type=${itemType}` : ''
+    return fetchAPI(`/user/favorites${query}`)
+  },
+  addFavorite: (itemType, itemId, itemName = '', extra = {}) => fetchAPI('/user/favorites', {
+    method: 'POST',
+    body: JSON.stringify({ item_type: itemType, item_id: String(itemId), item_name: itemName, extra })
+  }),
+  removeFavorite: (itemType, itemId) => fetchAPI(`/user/favorites/${itemType}/${itemId}`, { method: 'DELETE' }),
+  // 联赛白名单管控
+  getLeaguesCatalog: () => fetchAPI('/user/leagues-catalog'),
+  getVisibleLeagues: () => fetchAPI('/user/visible-leagues'),
+}
+
+// 体彩分析相关
+export const lotteryAPI = {
+  // 获取准确率
+  getAccuracy: (days = 30) => fetchAPI(`/lottery/accuracy?days=${days}`),
+
+  // 单场分析
+  analyzeMatch: (lotteryMatchId, force = true) => fetchAPI(`/lottery/analyze/${lotteryMatchId}?force=${force}&sync=true`, { method: 'POST' }),
+
+  // 批量分析
+  analyzeBatch: (date = null, matchIds = null, force = true) => {
+    const body = {}
+    if (date) body.date = date
+    if (matchIds) body.match_ids = matchIds
+    return fetchAPI(`/lottery/analyze-batch?force=${force}`, {
+      method: 'POST',
+      body: JSON.stringify(body)
+    })
+  },
+
+  // 复盘数据
+  getReview: (days = 30, playType = null, correct = null) => {
+    const params = new URLSearchParams({ days })
+    if (playType) params.append('play_type', playType)
+    if (correct !== null) params.append('correct', correct)
+    return fetchAPI(`/lottery/review?${params}`)
+  },
+
+  // 健康检查
+  getHealth: () => fetchAPI('/lottery/health'),
+
+  // 数据完整度
+  getDataCompleteness: (date = null) =>
+    fetchAPI(`/lottery/data-completeness${buildQuery({ date })}`),
+
+  getDataCompletenessRange: ({ startDate, endDate, limitPerDay = 200 } = {}) =>
+    fetchAPI(`/lottery/data-completeness/range${buildQuery({
+      start_date: startDate,
+      end_date: endDate,
+      limit_per_day: limitPerDay,
+    })}`),
+
+  getAutomationAudit: ({
+    dateFrom = null,
+    dateTo = null,
+    recentHours = 24,
+    staleRunningHours = 6,
+    duplicateThreshold = 10,
+  } = {}) => fetchAPI(`/lottery/automation-audit${buildQuery({
+    date_from: dateFrom,
+    date_to: dateTo,
+    recent_hours: recentHours,
+    stale_running_hours: staleRunningHours,
+    duplicate_threshold: duplicateThreshold,
+  })}`),
+
+  getAutomationDashboard: ({
+    dateFrom = null,
+    dateTo = null,
+    league = '世界杯',
+    recentHours = 24,
+  } = {}) => fetchAPI(`/lottery/automation-dashboard${buildQuery({
+    date_from: dateFrom,
+    date_to: dateTo,
+    league,
+    recent_hours: recentHours,
+  })}`),
+
+  getAutomationControl: () => fetchAPI('/lottery/automation-control'),
+
+  startAutomationControl: ({
+    runNow = true,
+    workers = 3,
+    historicalDates = 1,
+    maxEvents = 6,
+    maxAnalysis = 10,
+    maxIntelligence = 6,
+    maxValidationDates = 1,
+    fetchLiveOu = true,
+    networkIntelligence = true,
+    includeLearning = true,
+  } = {}) => fetchAPI(`/lottery/automation-control/start${buildQuery({
+    run_now: runNow,
+    workers,
+    historical_dates: historicalDates,
+    max_events: maxEvents,
+    max_analysis: maxAnalysis,
+    max_intelligence: maxIntelligence,
+    max_validation_dates: maxValidationDates,
+    fetch_live_ou: fetchLiveOu,
+    network_intelligence: networkIntelligence,
+    include_learning: includeLearning,
+  })}`, { method: 'POST' }),
+
+  pauseAutomationControl: () => fetchAPI('/lottery/automation-control/pause', { method: 'POST' }),
+
+  stopAutomationControl: () => fetchAPI('/lottery/automation-control/stop', { method: 'POST' }),
+
+  runAutomationCenter: ({
+    mode = 'mixed',
+    dateFrom = null,
+    dateTo = null,
+    league = '世界杯',
+    historicalDates = 1,
+    workers = 3,
+    taskTimeout = 300,
+    maxEvents = 6,
+    maxAnalysis = 10,
+    maxIntelligence = 6,
+    maxValidationDates = 1,
+    fetchLiveOu = true,
+    networkIntelligence = true,
+    includeLearning = true,
+    forceAnalysis = false,
+    forceValidation = false,
+    forceLearning = false,
+    dryRun = false,
+    background = true,
+  } = {}) => fetchAPI(`/lottery/automation-center/run${buildQuery({
+    mode,
+    date_from: dateFrom,
+    date_to: dateTo,
+    league,
+    historical_dates: historicalDates,
+    workers,
+    task_timeout: taskTimeout,
+    max_events: maxEvents,
+    max_analysis: maxAnalysis,
+    max_intelligence: maxIntelligence,
+    max_validation_dates: maxValidationDates,
+    fetch_live_ou: fetchLiveOu,
+    network_intelligence: networkIntelligence,
+    include_learning: includeLearning,
+    force_analysis: forceAnalysis,
+    force_validation: forceValidation,
+    force_learning: forceLearning,
+    dry_run: dryRun,
+    background,
+  })}`, { method: 'POST' }),
+
+  retryAutomationFailures: ({
+    runId,
+    background = true,
+    workers = 2,
+    taskKey = null,
+    taskIndex = null,
+  } = {}) => fetchAPI(`/lottery/automation-center/retry-failed${buildQuery({
+    run_id: runId,
+    task_key: taskKey,
+    task_index: taskIndex,
+    background,
+    workers,
+  })}`, { method: 'POST' }),
+
+  // oddsfe赛果/半场证据补齐
+  syncEventDetails: ({
+    dateFrom = null,
+    dateTo = null,
+    background = false,
+    dryRun = false,
+    fetchSchedule = false,
+    includeScheduleOnly = true,
+    maxEvents = 4,
+    batches = 3,
+    batchGapSeconds = 2,
+    schedulePaddingDays = 1,
+  } = {}) => fetchAPI(`/lottery/sync-oddsfe-event-details${buildQuery({
+    date_from: dateFrom,
+    date_to: dateTo,
+    background,
+    dry_run: dryRun,
+    fetch_schedule: fetchSchedule,
+    include_schedule_only: includeScheduleOnly,
+    max_events: maxEvents,
+    batches,
+    batch_gap_seconds: batchGapSeconds,
+    schedule_padding_days: schedulePaddingDays,
+  })}`, { method: 'POST' }),
+
+  // 赔率数据
+  syncOddsfeOuLines: ({
+    dateFrom = null,
+    dateTo = null,
+    days = 21,
+    background = true,
+    dryRun = false,
+    fetchLive = true,
+    maxEvents = 8,
+    reanalyze = false,
+  } = {}) => fetchAPI(`/lottery/sync-oddsfe-ou-lines${buildQuery({
+    date_from: dateFrom,
+    date_to: dateTo,
+    days,
+    background,
+    dry_run: dryRun,
+    fetch_live: fetchLive,
+    max_events: maxEvents,
+    reanalyze,
+  })}`, { method: 'POST' }),
+
+  getOdds: (lotteryMatchId) => fetchAPI(`/lottery/odds/${lotteryMatchId}`),
+
+  // 手动修正/录入赛果（带后端审计）
+  correctResult: (lotteryMatchId, payload) => fetchAPI(`/lottery/results/${encodeURIComponent(lotteryMatchId)}/correct`, {
+    method: 'POST',
+    body: JSON.stringify(payload || {})
+  }),
+
+  refreshResult: (lotteryMatchId, { overwrite = true } = {}) =>
+    fetchAPI(`/lottery/results/${encodeURIComponent(lotteryMatchId)}/refresh${buildQuery({ overwrite })}`, { method: 'POST' }),
+
+  getResultCorrections: (lotteryMatchId) =>
+    fetchAPI(`/lottery/results/${encodeURIComponent(lotteryMatchId)}/corrections`),
+
+  // 预测报告
+  getPrediction: (lotteryMatchId) => fetchAPI(`/lottery/prediction/${lotteryMatchId}`),
+
+  // 今日比赛列表
+  getMatches: (date = null) => {
+    const query = date ? `?date=${date}` : ''
+    return fetchAPI(`/lottery/matches${query}`)
+  },
+
+  // 模型版本+权重+gate
+  getModelStatus: () => fetchAPI('/lottery/model-status'),
+
+  // 重分析变更历史
+  getReanalysisChanges: (lotteryMatchId) => fetchAPI(`/lottery/reanalysis-changes/${lotteryMatchId}`),
+
+  // 准确率趋势
+  getAccuracyTrend: ({ days = 30, playType = null, granularity = 'day' } = {}) =>
+    fetchAPI(`/lottery/accuracy-trend${buildQuery({ days, play_type: playType, granularity })}`),
+
+  // 模型基线对比
+  getBaselineComparison: ({ playType = 'spf', days = 30 } = {}) =>
+    fetchAPI(`/lottery/baseline-comparison${buildQuery({ play_type: playType, days })}`),
+
+  // 时间分割基线对比(train/validation/test)
+  getTimeSplitComparison: ({ playType = 'spf', totalDays = 90 } = {}) =>
+    fetchAPI(`/lottery/time-split-comparison${buildQuery({ play_type: playType, total_days: totalDays })}`),
+
+  // 按赛事类型基线对比
+  getCompetitionSplitComparison: ({ playType = 'spf', days = 90 } = {}) =>
+    fetchAPI(`/lottery/competition-split-comparison${buildQuery({ play_type: playType, days })}`),
+
+  // 综合验证指标(Brier + calibration + market diff + leakage)
+  getValidationMetrics: (days = 30) =>
+    fetchAPI(`/lottery/validation-metrics${buildQuery({ days })}`),
+
+  // 错误归因产生的数据需求
+  getNextDataRequirements: ({ status = 'pending', limit = 50 } = {}) =>
+    fetchAPI(`/lottery/next-data-requirements${buildQuery({ status, limit })}`),
+
+  // 比赛脚本(方向轴/边界轴/进球轴/BTTS/半场节奏)
+  getMatchScript: (lotteryMatchId) => fetchAPI(`/lottery/match-script/${lotteryMatchId}`),
+
+  // 置信度分层准确率(settlement grade + enriched BF metrics)
+  getAccuracyByTier: (days = 30) => fetchAPI(`/lottery/accuracy-by-tier${buildQuery({ days })}`),
+}
+
+export const worldCupAPI = {
+  health: () => fetchAPI('/world-cup/2026/health'),
+  getContext: ({ live = true, includeMatches = false } = {}) =>
+    fetchAPI(`/world-cup/2026/context${buildQuery({ live, include_matches: includeMatches })}`),
+  getRules: () => fetchAPI('/world-cup/2026/rules'),
+  getGroups: ({ live = true } = {}) =>
+    fetchAPI(`/world-cup/2026/groups${buildQuery({ live })}`),
+  getKnockout: ({ live = true } = {}) =>
+    fetchAPI(`/world-cup/2026/knockout${buildQuery({ live })}`),
+  getMatches: ({ live = true } = {}) =>
+    fetchAPI(`/world-cup/2026/matches${buildQuery({ live })}`),
+  getMatchContext: (matchId, { live = true } = {}) =>
+    fetchAPI(`/world-cup/2026/match/${encodeURIComponent(matchId)}/context${buildQuery({ live })}`),
+}
+
+// 情报中枢相关
+export const intelligenceAPI = {
+  health: () => fetchAPI('/intelligence/health'),
+  sourceHealth: () => fetchAPI('/intelligence/source-health'),
+
+  getRequirements: (analysisView = 'world_cup') =>
+    fetchAPI(`/intelligence/requirements/${analysisView}`),
+
+  generateJobs: ({ date = null, source = 'lottery' } = {}) =>
+    fetchAPI(`/intelligence/jobs/generate${buildQuery({ date, source })}`, { method: 'POST' }),
+
+  runDaily: ({
+    date = null,
+    includeExternal = false,
+    collectors = null,
+    network = true,
+    force = false,
+  } = {}) =>
+    fetchAPI(`/intelligence/run-daily${buildQuery({
+      date,
+      include_external: includeExternal,
+      collectors,
+      network,
+      force,
+    })}`, { method: 'POST' }),
+
+  startRun: ({
+    date = null,
+    includeExternal = false,
+    collectors = null,
+    network = true,
+    force = false,
+    background = true,
+  } = {}) =>
+    fetchAPI(`/intelligence/runs${buildQuery({
+      date,
+      include_external: includeExternal,
+      collectors,
+      network,
+      force,
+      background,
+    })}`, { method: 'POST' }),
+
+  backfillFinished: ({
+    startDate = null,
+    endDate = null,
+    includeExternal = true,
+    collectors = null,
+    network = false,
+    force = false,
+    playType = 'spf',
+    limit = 200,
+    background = false,
+  } = {}) =>
+    fetchAPI(`/intelligence/backfill-finished${buildQuery({
+      start_date: startDate,
+      end_date: endDate,
+      include_external: includeExternal,
+      collectors,
+      network,
+      force,
+      play_type: playType,
+      limit,
+      background,
+    })}`, { method: 'POST' }),
+
+  listRuns: (limit = 50) =>
+    fetchAPI(`/intelligence/runs${buildQuery({ limit })}`),
+
+  getRun: (runId) =>
+    fetchAPI(`/intelligence/runs/${encodeURIComponent(runId)}`),
+
+  listJobs: ({ date = null, status = null, limit = 100 } = {}) =>
+    fetchAPI(`/intelligence/jobs${buildQuery({ date, status, limit })}`),
+
+  getJob: (jobId) =>
+    fetchAPI(`/intelligence/jobs/${encodeURIComponent(jobId)}`),
+
+  getPackage: (jobId) =>
+    fetchAPI(`/intelligence/jobs/${encodeURIComponent(jobId)}/package`),
+
+  collectBuiltin: (jobId, force = false) =>
+    fetchAPI(`/intelligence/jobs/${encodeURIComponent(jobId)}/collect/builtin${buildQuery({ force })}`, { method: 'POST' }),
+
+  collectExternal: (jobId, {
+    collectors = null,
+    network = true,
+    force = false,
+  } = {}) =>
+    fetchAPI(`/intelligence/jobs/${encodeURIComponent(jobId)}/collect/external${buildQuery({
+      collectors,
+      network,
+      force,
+    })}`, { method: 'POST' }),
+
+  buildPackage: (jobId) =>
+    fetchAPI(`/intelligence/jobs/${encodeURIComponent(jobId)}/package`, { method: 'POST' }),
+
+  listReviews: ({ jobId = null, limit = 100 } = {}) =>
+    fetchAPI(`/intelligence/reviews${buildQuery({ job_id: jobId, limit })}`),
+
+  autoReview: ({ date = null, playType = 'spf' } = {}) =>
+    fetchAPI(`/intelligence/reviews/auto${buildQuery({ date, play_type: playType })}`, { method: 'POST' }),
+
+  getTrainingSamples: ({
+    limit = 200,
+    onlySettled = true,
+    attribution = null,
+    includeRawPackage = false,
+  } = {}) =>
+    fetchAPI(`/intelligence/training-samples${buildQuery({
+      limit,
+      only_settled: onlySettled,
+      attribution,
+      include_raw_package: includeRawPackage,
+    })}`),
+
+  getTrainingSummary: ({
+    startDate = null,
+    endDate = null,
+    limit = 10000,
+  } = {}) =>
+    fetchAPI(`/intelligence/training-summary${buildQuery({
+      start_date: startDate,
+      end_date: endDate,
+      limit,
+    })}`),
+
+  exportTrainingSamples: ({
+    limit = 10000,
+    onlySettled = true,
+    attribution = null,
+    includeRawPackage = false,
+  } = {}) =>
+    fetchAPI(`/intelligence/training-samples/export${buildQuery({
+      limit,
+      only_settled: onlySettled,
+      attribution,
+      include_raw_package: includeRawPackage,
+    })}`, { method: 'POST' }),
 }

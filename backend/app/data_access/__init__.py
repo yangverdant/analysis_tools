@@ -11,6 +11,7 @@ from .prediction_dao import PredictionDAO
 from .validation_dao import ValidationDAO
 from .health_dao import DataSourceHealthDAO
 from .cycle_dao import CycleStateDAO
+from .foundation_dao import FoundationDAO
 
 __all__ = [
     'get_connection',
@@ -21,4 +22,5 @@ __all__ = [
     'ValidationDAO',
     'DataSourceHealthDAO',
     'CycleStateDAO',
+    'FoundationDAO',
 ]

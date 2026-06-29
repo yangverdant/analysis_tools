@@ -209,8 +209,16 @@ class ScheduledCollector:
             logger.info("开始备份数据库...")
             db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
                                    'data', 'football_v2.db')
-            backup_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                                       'backups', f'football_v2_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db')
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            backup_root = os.environ.get(
+                'FOOTBALL_BACKUP_DIR',
+                os.path.abspath(os.path.join(project_root, '..', 'football_backups'))
+            )
+            backup_path = os.path.join(
+                backup_root,
+                'scheduled_db',
+                f'football_v2_{datetime.now().strftime("%Y%m%d_%H%M%S")}.db'
+            )
 
             os.makedirs(os.path.dirname(backup_path), exist_ok=True)
             shutil.copy(db_path, backup_path)

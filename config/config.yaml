@@ -3,7 +3,7 @@
 
 database:
   path: data/football_v2.db
-  backup_dir: data/backups
+  backup_dir: ../football_backups/app_backups
 
 scheduler:
   timezone: Asia/Shanghai

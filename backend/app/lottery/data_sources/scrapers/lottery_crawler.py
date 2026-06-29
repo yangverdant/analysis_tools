@@ -509,9 +509,11 @@ class LotteryCrawlerSync:
         }
 
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Referer': 'https://www.sporttery.cn/'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Referer': 'https://www.sporttery.cn/',
+            'Origin': 'https://www.sporttery.cn',
         }
 
         # 创建session并禁用代理
@@ -542,6 +544,8 @@ class LotteryCrawlerSync:
     def crawl_results_sync(self, match_date: date = None) -> List[Dict]:
         """同步爬取开奖结果"""
         import requests
+        import urllib3
+        urllib3.disable_warnings()
 
         if match_date is None:
             match_date = date.today()
@@ -552,13 +556,17 @@ class LotteryCrawlerSync:
         }
 
         headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'application/json',
-            'Referer': 'https://www.sporttery.cn/'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Referer': 'https://www.sporttery.cn/',
+            'Origin': 'https://www.sporttery.cn',
         }
 
         try:
-            response = requests.get(url, params=params, headers=headers, timeout=30)
+            session = requests.Session()
+            session.trust_env = False
+            response = session.get(url, params=params, headers=headers, timeout=30, verify=False)
             response.raise_for_status()
 
             return self._async_crawler.parse_results(response.text)

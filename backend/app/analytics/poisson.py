@@ -118,8 +118,8 @@ class PoissonPredictor:
             # 主场失球 = 客队进球
             cursor.execute("""
                 SELECT
-                    AVG(away_goals) as avg_conceded,
-                    COUNT(*) as matches
+                    AVG(away_goals),
+                    COUNT(*)
                 FROM matches
                 WHERE home_team_id = ?
                 AND status = 'finished'
@@ -130,8 +130,8 @@ class PoissonPredictor:
             # 客场失球 = 主队进球
             cursor.execute("""
                 SELECT
-                    AVG(home_goals) as avg_conceded,
-                    COUNT(*) as matches
+                    AVG(home_goals),
+                    COUNT(*)
                 FROM matches
                 WHERE away_team_id = ?
                 AND status = 'finished'
@@ -140,10 +140,10 @@ class PoissonPredictor:
             """, (team_id, recent_matches))
 
         result = cursor.fetchone()
-        if result and result['matches'] > 0:
+        if result and result[1] > 0:
             return {
-                'avg_conceded': result['avg_conceded'] or 1.0,
-                'matches': result['matches']
+                'avg_conceded': result[0] or 1.0,
+                'matches': result[1]
             }
 
         return {
@@ -151,12 +151,60 @@ class PoissonPredictor:
             'matches': 0
         }
 
+    def _get_league_avg_goals(self, league_id: int, conn: sqlite3.Connection) -> Tuple[float, float]:
+        """查询联赛平均进球(主/客分开)
+
+        优先从league_poisson_calibration表读取(预计算, 快),
+        不存在时实时计算, 最终fallback到全局均值。
+        """
+        if not league_id:
+            return 1.50, 1.10
+        try:
+            cursor = conn.cursor()
+            # 优先: 预计算的校准表
+            cursor.execute("""
+                SELECT avg_home_goals, avg_away_goals
+                FROM league_poisson_calibration
+                WHERE league_id = ?
+            """, (league_id,))
+            row = cursor.fetchone()
+            if row and row[0] and row[1]:
+                return round(row[0], 3), round(row[1], 3)
+
+            # 兜底: 全局校准表
+            cursor.execute("""
+                SELECT avg_home_goals, avg_away_goals
+                FROM league_poisson_calibration
+                WHERE league_id = '_global'
+            """)
+            row = cursor.fetchone()
+            if row and row[0] and row[1]:
+                return round(row[0], 3), round(row[1], 3)
+
+            # 兜底2: 实时计算(校准表不存在时)
+            cursor.execute("""
+                SELECT AVG(home_goals) as avg_home,
+                       AVG(away_goals) as avg_away
+                FROM matches
+                WHERE league_id = ? AND status = 'finished'
+                AND home_goals IS NOT NULL AND away_goals IS NOT NULL
+                AND match_date > date('now', '-2 years')
+            """, (league_id,))
+            row = cursor.fetchone()
+            if row and row[0] and row[1]:
+                return round(row[0], 3), round(row[1], 3)
+        except Exception:
+            pass
+        return 1.50, 1.10
+
     def calculate_expected_goals(
         self,
         home_team_id: int,
         away_team_id: int,
         recent_matches: int = 20,
-        conn: sqlite3.Connection = None
+        conn: sqlite3.Connection = None,
+        league_id: int = None,
+        is_neutral_venue: bool = False
     ) -> Tuple[float, float]:
         """
         计算双方预期进球数
@@ -166,26 +214,53 @@ class PoissonPredictor:
         - 客队客场防守能力
         - 客队客场进攻能力
         - 主队主场防守能力
+
+        is_neutral_venue: 中立场地时使用整体进攻/防守(不分主客),
+        避免弱队因"主场"数据膨胀xG
         """
         if conn is None:
             conn = self.get_connection()
 
-        # 主队主场进攻
-        home_attack = self.get_team_scoring_stats(home_team_id, is_home=True, recent_matches=recent_matches, conn=conn)
-        # 客队客场防守
-        away_defense = self.get_team_conceding_stats(away_team_id, is_home=False, recent_matches=recent_matches, conn=conn)
+        if is_neutral_venue:
+            # 中立场地: 使用整体进攻/防守(主客平均值)
+            home_attack_h = self.get_team_scoring_stats(home_team_id, is_home=True, recent_matches=recent_matches, conn=conn)
+            home_attack_a = self.get_team_scoring_stats(home_team_id, is_home=False, recent_matches=recent_matches, conn=conn)
+            home_attack_avg = (home_attack_h['avg_goals'] + home_attack_a['avg_goals']) / 2
 
-        # 客队客场进攻
-        away_attack = self.get_team_scoring_stats(away_team_id, is_home=False, recent_matches=recent_matches, conn=conn)
-        # 主队主场防守
-        home_defense = self.get_team_conceding_stats(home_team_id, is_home=True, recent_matches=recent_matches, conn=conn)
+            away_attack_h = self.get_team_scoring_stats(away_team_id, is_home=True, recent_matches=recent_matches, conn=conn)
+            away_attack_a = self.get_team_scoring_stats(away_team_id, is_home=False, recent_matches=recent_matches, conn=conn)
+            away_attack_avg = (away_attack_h['avg_goals'] + away_attack_a['avg_goals']) / 2
 
-        # 主队预期进球 = 主队进攻 × 客队防守 / 联赛平均
-        league_avg_home_goals = 1.5
-        league_avg_away_goals = 1.1
+            home_defense_h = self.get_team_conceding_stats(home_team_id, is_home=True, recent_matches=recent_matches, conn=conn)
+            home_defense_a = self.get_team_conceding_stats(home_team_id, is_home=False, recent_matches=recent_matches, conn=conn)
+            home_defense_avg = (home_defense_h['avg_conceded'] + home_defense_a['avg_conceded']) / 2
 
-        home_xg = home_attack['avg_goals'] * (away_defense['avg_conceded'] / league_avg_away_goals)
-        away_xg = away_attack['avg_goals'] * (home_defense['avg_conceded'] / league_avg_home_goals)
+            away_defense_h = self.get_team_conceding_stats(away_team_id, is_home=True, recent_matches=recent_matches, conn=conn)
+            away_defense_a = self.get_team_conceding_stats(away_team_id, is_home=False, recent_matches=recent_matches, conn=conn)
+            away_defense_avg = (away_defense_h['avg_conceded'] + away_defense_a['avg_conceded']) / 2
+
+            # 中立场地联赛均值: 用统一均值而非主客分离
+            league_avg_home_goals, league_avg_away_goals = self._get_league_avg_goals(league_id, conn)
+            league_avg = (league_avg_home_goals + league_avg_away_goals) / 2
+
+            home_xg = home_attack_avg * (away_defense_avg / league_avg)
+            away_xg = away_attack_avg * (home_defense_avg / league_avg)
+        else:
+            # 主队主场进攻
+            home_attack = self.get_team_scoring_stats(home_team_id, is_home=True, recent_matches=recent_matches, conn=conn)
+            # 客队客场防守
+            away_defense = self.get_team_conceding_stats(away_team_id, is_home=False, recent_matches=recent_matches, conn=conn)
+
+            # 客队客场进攻
+            away_attack = self.get_team_scoring_stats(away_team_id, is_home=False, recent_matches=recent_matches, conn=conn)
+            # 主队主场防守
+            home_defense = self.get_team_conceding_stats(home_team_id, is_home=True, recent_matches=recent_matches, conn=conn)
+
+            # 联赛平均进球(从DB查询，而非硬编码)
+            league_avg_home_goals, league_avg_away_goals = self._get_league_avg_goals(league_id, conn)
+
+            home_xg = home_attack['avg_goals'] * (away_defense['avg_conceded'] / league_avg_away_goals)
+            away_xg = away_attack['avg_goals'] * (home_defense['avg_conceded'] / league_avg_home_goals)
 
         # 限制范围
         home_xg = max(0.3, min(home_xg, 4.0))
@@ -198,7 +273,9 @@ class PoissonPredictor:
         home_team_id: int,
         away_team_id: int,
         recent_matches: int = 20,
-        conn: sqlite3.Connection = None
+        conn: sqlite3.Connection = None,
+        league_id: int = None,
+        is_neutral_venue: bool = False
     ) -> Dict:
         """
         预测比赛结果
@@ -211,11 +288,15 @@ class PoissonPredictor:
 
         # 计算预期进球
         home_xg, away_xg = self.calculate_expected_goals(
-            home_team_id, away_team_id, recent_matches, conn
+            home_team_id, away_team_id, recent_matches, conn,
+            league_id=league_id, is_neutral_venue=is_neutral_venue
         )
 
-        # 计算比分概率矩阵
-        score_matrix = self._calculate_score_matrix(home_xg, away_xg)
+        # 计算比分概率矩阵(双变量Poisson优先, 独立Poisson兜底)
+        try:
+            score_matrix = self._calculate_score_matrix_bivariate(home_xg, away_xg)
+        except Exception:
+            score_matrix = self._calculate_score_matrix(home_xg, away_xg)
 
         # 计算胜平负概率
         home_win_prob = 0.0
@@ -267,8 +348,12 @@ class PoissonPredictor:
             'both_teams_to_score': self._calculate_btts(score_matrix)
         }
 
-    def _calculate_score_matrix(self, home_xg: float, away_xg: float) -> Dict[int, Dict[int, float]]:
-        """计算比分概率矩阵"""
+    def _calculate_score_matrix(self, home_xg: float, away_xg: float, rho: float = -0.1) -> Dict[int, Dict[int, float]]:
+        """计算比分概率矩阵 — 含Dixon-Coles平局修正
+
+        rho: Dixon-Coles相关参数，负值增大小比分平局(0:0, 1:1)概率
+        文献典型值rho=-0.1，平局recall提升3-5pp
+        """
         matrix = {}
         for home_goals in range(self.MAX_GOALS + 1):
             matrix[home_goals] = {}
@@ -276,7 +361,85 @@ class PoissonPredictor:
                 home_prob = self.poisson_probability(home_goals, home_xg)
                 away_prob = self.poisson_probability(away_goals, away_xg)
                 matrix[home_goals][away_goals] = home_prob * away_prob
+
+        # Dixon-Coles修正: 调整低比分格(0:0, 1:0, 0:1, 1:1)
+        if rho != 0:
+            tau = rho  # 简化: 对低xg比赛tau≈rho
+            dc_00 = 1 - home_xg * away_xg * tau
+            dc_10 = 1 + away_xg * tau
+            dc_01 = 1 + home_xg * tau
+            dc_11 = 1 - tau
+            # 仅在修正系数合理时应用(防止负概率)
+            if dc_00 > 0 and dc_10 > 0 and dc_01 > 0 and dc_11 > 0:
+                matrix[0][0] *= dc_00
+                matrix[1][0] *= dc_10
+                matrix[0][1] *= dc_01
+                matrix[1][1] *= dc_11
+            # 归一化
+            total = sum(matrix[h][a] for h in range(self.MAX_GOALS + 1) for a in range(self.MAX_GOALS + 1))
+            if total > 0:
+                for h in range(self.MAX_GOALS + 1):
+                    for a in range(self.MAX_GOALS + 1):
+                        matrix[h][a] /= total
+
         return matrix
+
+    def _calculate_score_matrix_bivariate(self, home_xg: float, away_xg: float,
+                                            lambda3: float = 0.1, rho: float = -0.1) -> Dict[int, Dict[int, float]]:
+        """双变量Poisson比分矩阵 + Dixon-Coles修正
+
+        双变量Poisson引入lambda3参数: 两队进球的协方差部分
+        home_xg = lambda1 + lambda3, away_xg = lambda2 + lambda3
+        lambda3 > 0: 进球正相关(对攻); lambda3 ≈ 0.1是典型值
+
+        优势: 独立Poisson假设两队进球完全无关, 实际比赛存在
+        弱正相关(一队进球→比赛开放→双方进球增加)
+        """
+        lambda1 = max(0.1, home_xg - lambda3)
+        lambda2 = max(0.1, away_xg - lambda3)
+
+        matrix = {}
+        for i in range(self.MAX_GOALS + 1):
+            matrix[i] = {}
+            for j in range(self.MAX_GOALS + 1):
+                matrix[i][j] = self._bivariate_poisson_pmf(i, j, lambda1, lambda2, lambda3)
+
+        # Dixon-Coles平局修正(叠加在双变量Poisson之上)
+        if rho != 0:
+            dc_00 = 1 - home_xg * away_xg * rho
+            dc_10 = 1 + away_xg * rho
+            dc_01 = 1 + home_xg * rho
+            dc_11 = 1 - rho
+            if dc_00 > 0 and dc_10 > 0 and dc_01 > 0 and dc_11 > 0:
+                matrix[0][0] *= dc_00
+                matrix[1][0] *= dc_10
+                matrix[0][1] *= dc_01
+                matrix[1][1] *= dc_11
+            total = sum(matrix[h][a] for h in range(self.MAX_GOALS + 1) for a in range(self.MAX_GOALS + 1))
+            if total > 0:
+                for h in range(self.MAX_GOALS + 1):
+                    for a in range(self.MAX_GOALS + 1):
+                        matrix[h][a] /= total
+
+        return matrix
+
+    def _bivariate_poisson_pmf(self, k1: int, k2: int, lambda1: float, lambda2: float, lambda3: float) -> float:
+        """双变量Poisson概率质量函数
+
+        P(k1, k2) = exp(-(lambda1+lambda2+lambda3)) *
+                    sum_{k=0}^{min(k1,k2)} (lambda1^(k1-k) / (k1-k)!) *
+                    (lambda2^(k2-k) / (k2-k)!) * (lambda3^k / k!)
+        """
+        total = 0.0
+        for k in range(min(k1, k2) + 1):
+            term = (
+                (lambda1 ** (k1 - k)) / math.factorial(k1 - k) *
+                (lambda2 ** (k2 - k)) / math.factorial(k2 - k) *
+                (lambda3 ** k) / math.factorial(k)
+            )
+            total += term
+
+        return total * math.exp(-(lambda1 + lambda2 + lambda3))
 
     def _format_score_matrix(self, matrix: Dict[int, Dict[int, float]]) -> List[List[float]]:
         """格式化比分矩阵为列表"""

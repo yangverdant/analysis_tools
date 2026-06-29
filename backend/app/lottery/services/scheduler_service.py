@@ -87,7 +87,10 @@ class SchedulerService:
             from .sync_service import LotterySyncService
 
             service = LotterySyncService(self.db_path)
-            result = service.sync_daily_matches()
+            result = service.sync_daily_matches(
+                bridge_oddsfe=False,
+                trigger_source='scheduler_fast_sporttery',
+            )
             service.close()
 
             self._update_task_status(task_id, 'success', result)

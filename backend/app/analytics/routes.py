@@ -3548,7 +3548,13 @@ async def run_learn():
     """执行参数学习"""
     from backend.app.core.learn import learn
     result = learn(DATABASE_PATH)
-    return {"adjustments": result.adjustments, "details": result.details, "circuit_breaks": result.circuit_breaks}
+    return {
+        "success": not bool(getattr(result, "error", None)),
+        "adjustments": result.adjustments,
+        "details": result.details,
+        "circuit_breaks": result.circuit_breaks,
+        "error": getattr(result, "error", None),
+    }
 
 
 @router.post("/agent/clv-update")

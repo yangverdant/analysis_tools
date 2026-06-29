@@ -49,6 +49,10 @@ class ValidationDAO:
                        AVG(brier_score) as avg_brier
                 FROM lottery_validation
                 WHERE validated_at >= date('now', ?)
+                  AND predicted_result IS NOT NULL
+                  AND actual_result IS NOT NULL
+                  AND TRIM(predicted_result) NOT IN ('', '--', '未知', 'unknown', 'UNKNOWN')
+                  AND TRIM(actual_result) NOT IN ('', '--', '未知', 'unknown', 'UNKNOWN')
             """
             params = [f'-{days} days']
             if play_type:

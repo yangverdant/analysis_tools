@@ -12,6 +12,7 @@
 
 import json
 import logging
+import os
 import sqlite3
 from datetime import date, datetime, timedelta
 
@@ -37,9 +38,16 @@ def collect(state, db_path: str) -> dict:
     # Step 3: oddsfe赔率采集 + 入库
     results['odds'] = _fetch_and_save_oddsfe_odds(db_path, match_date_str)
 
+    # Step 3b: oddsfe O/U并发采集 + 自动merge到oddsfe_merged.db
+    results['ou_collect'] = _collect_and_merge_oddsfe_ou(db_path, match_date_str)
+
     # Step 4: 更新数据源健康
     _update_health(db_path, results['sync'].get('success', False), 'sporttery')
     _update_health(db_path, results['odds'].get('success', False), 'oddsfe')
+    _update_health(db_path, results['ou_collect'].get('success', False), 'oddsfe_ou')
+
+    # Step 5: 更新已过开赛时间的比赛状态
+    results['status_update'] = _update_match_status(db_path)
 
     logger.info('采集完成: %d场入库, %d赔率入库',
                 results['sync'].get('saved', 0),
@@ -63,7 +71,11 @@ def _sync_matches(db_path: str, match_date: date) -> dict:
         try:
             from backend.app.lottery.services.sync_service import LotterySyncService
             service = LotterySyncService(db_path)
-            result = service.sync_daily_matches(match_date)
+            result = service.sync_daily_matches(
+                match_date,
+                bridge_oddsfe=False,
+                trigger_source='core_collect_fast_sporttery',
+            )
 
             unmapped = service.mapper.list_unmapped_teams()
             if unmapped:
@@ -336,4 +348,269 @@ def _update_health(db_path: str, success: bool, source_name: str):
         status = 'healthy' if success else 'error'
         dao.update_status(source_name, status, success=success)
     except Exception as e:
-        logger.debug(f'健康更新失败: {e}')
+        logger.debug(f'健康更新失败: %s', e)
+
+
+def _update_match_status(db_path: str) -> dict:
+    """更新已过开赛时间的比赛状态
+
+    selling → closed: 比赛时间已过
+    closed → finished: 已有结果数据
+    """
+    closed_count = 0
+    finished_count = 0
+
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        cursor = conn.cursor()
+
+        # selling → closed: 有beijing_time且已过
+        cursor.execute("""
+            UPDATE lottery_matches SET sell_status = 'closed'
+            WHERE sell_status = 'selling'
+            AND beijing_time IS NOT NULL
+            AND datetime(beijing_time) < datetime('now', '+8 hours')
+        """)
+        closed_count += cursor.rowcount
+
+        # selling → closed: 无beijing_time，用match_date判断
+        cursor.execute("""
+            UPDATE lottery_matches SET sell_status = 'closed'
+            WHERE sell_status = 'selling'
+            AND beijing_time IS NULL
+            AND match_date < date('now', '+8 hours')
+        """)
+        closed_count += cursor.rowcount
+
+        # closed → finished: 有结果数据
+        cursor.execute("""
+            UPDATE lottery_matches SET sell_status = 'finished'
+            WHERE sell_status = 'closed'
+            AND lottery_match_id IN (
+                SELECT lottery_match_id FROM lottery_results
+            )
+        """)
+        finished_count = cursor.rowcount
+
+        conn.commit()
+        conn.close()
+
+        logger.info('状态更新: %d场→closed, %d场→finished', closed_count, finished_count)
+        return {'closed': closed_count, 'finished': finished_count}
+
+    except Exception as e:
+        logger.warning('状态更新失败: %s', e)
+        return {'closed': 0, 'finished': 0, 'error': str(e)}
+
+
+def _resolve_oddsfe_db_path(db_path: str) -> str:
+    """Resolve the oddsfe merged cache path used by both local and cloud jobs."""
+    env_path = os.environ.get('ODDSFE_DB_PATH')
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+    preferred = os.path.join(project_root, 'fetchers', 'odds_feed_api', 'oddsfe_merged.db')
+    legacy = os.path.join(os.path.dirname(db_path), 'oddsfe_merged.db')
+    candidates = [path for path in (env_path, preferred, legacy) if path]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return candidates[0] if candidates else legacy
+
+
+def _collect_and_merge_oddsfe_ou(db_path: str, match_date: str) -> dict:
+    """并发采集oddsfe O/U + 1X2赔率，直写oddsfe_merged.db
+
+    采集后自动同步Pinnacle O/U到football_v2.db的oddsfe_matches表，
+    并标记受影响的分析报告为stale。
+    """
+    try:
+        from fetchers.odds_feed_api.oddsfe_ou_concurrent import collect_ou_concurrent
+    except ImportError:
+        logger.warning('oddsfe_ou_concurrent模块不可用，跳过O/U采集')
+        return {'success': False, 'error': 'module not available'}
+
+    # 确定oddsfe_merged.db路径
+    oddsfe_db = _resolve_oddsfe_db_path(db_path)
+
+    # 健康检查：如果O/U数据<24h，可选跳过
+    health = _check_oddsfe_ou_health(oddsfe_db)
+    if health.get('healthy') and health.get('hours_since', 999) < 6:
+        logger.info(f'oddsfe O/U数据新鲜({health["hours_since"]:.0f}h前更新)，跳过采集')
+        return {'success': True, 'skipped': True, 'reason': 'data fresh'}
+
+    # 执行并发采集
+    try:
+        result = collect_ou_concurrent(
+            past_days=2,
+            future_days=5,
+            oddsfe_db_path=oddsfe_db,
+            max_workers=8,
+        )
+    except Exception as e:
+        logger.error(f'oddsfe O/U采集异常: {e}')
+        return {'success': False, 'error': str(e)}
+
+    # 同步Pinnacle O/U到football_v2.db的oddsfe_matches表
+    sync_result = _sync_ou_to_football_v2(oddsfe_db, db_path, match_date)
+
+    # 标记受影响的分析报告为stale
+    _invalidate_stale_analysis(db_path, match_date)
+
+    return {
+        'success': result.get('pinnacle_ou', 0) > 0,
+        'events_collected': result.get('details_fetched', 0),
+        'ou_written': result.get('ou_written', 0),
+        'pinnacle_ou': result.get('pinnacle_ou', 0),
+        'sync': sync_result,
+    }
+
+
+def _check_oddsfe_ou_health(oddsfe_db_path: str) -> dict:
+    """检查oddsfe_merged.db的O/U数据新鲜度
+
+    Returns: {'healthy': bool, 'hours_since': float, 'reason': str}
+    """
+    import os as _os
+
+    if not _os.path.exists(oddsfe_db_path):
+        return {'healthy': False, 'reason': 'oddsfe_merged.db not found'}
+
+    try:
+        conn = sqlite3.connect(oddsfe_db_path, timeout=10)
+        row = conn.execute("""
+            SELECT MAX(event_start_at) FROM oddsfe
+            WHERE OVER_UNDER_prematch_lines IS NOT NULL
+            AND OVER_UNDER_prematch_lines != ''
+        """).fetchone()
+        conn.close()
+
+        if not row or not row[0]:
+            return {'healthy': False, 'reason': 'no O/U data at all'}
+
+        from datetime import timezone
+        latest_str = row[0].replace('Z', '+00:00')
+        try:
+            # oddsfe timestamps are UTC without timezone suffix
+            if '+' not in latest_str and not latest_str.endswith('00:00'):
+                latest_str += '+00:00'
+            latest_dt = datetime.fromisoformat(latest_str)
+            hours_since = (datetime.now(timezone.utc) - latest_dt).total_seconds() / 3600
+        except (ValueError, TypeError):
+            # Fallback: parse as naive UTC
+            try:
+                latest_dt = datetime.strptime(row[0][:19], '%Y-%m-%dT%H:%M:%S')
+                hours_since = (datetime.utcnow() - latest_dt).total_seconds() / 3600
+            except (ValueError, TypeError):
+                return {'healthy': False, 'reason': 'cannot parse timestamp'}
+
+        if hours_since > 48:
+            return {'healthy': False, 'hours_since': hours_since, 'reason': f'data {hours_since:.0f}h old'}
+
+        return {'healthy': True, 'hours_since': max(0, hours_since)}
+
+    except Exception as e:
+        return {'healthy': False, 'reason': str(e)}
+
+
+def _sync_ou_to_football_v2(oddsfe_db_path: str, football_v2_path: str, match_date: str) -> dict:
+    """从oddsfe_merged.db同步Pinnacle O/U数据到football_v2.db的oddsfe_matches表"""
+    import os as _os
+
+    if not _os.path.exists(oddsfe_db_path):
+        return {'success': False, 'reason': 'oddsfe_merged.db not found'}
+
+    try:
+        oddsfe_conn = sqlite3.connect(oddsfe_db_path, timeout=10)
+        v2_conn = sqlite3.connect(football_v2_path, timeout=10)
+
+        # 确保oddsfe_matches表存在
+        v2_conn.executescript("""
+            CREATE TABLE IF NOT EXISTS oddsfe_matches (
+                event_id TEXT PRIMARY KEY,
+                event_start_at TEXT,
+                team_home_name TEXT,
+                team_away_name TEXT,
+                category_name TEXT,
+                tournament_name TEXT,
+                ou_pinnacle_line REAL,
+                ou_pinnacle_over REAL,
+                ou_pinnacle_under REAL,
+                ou_pinnacle_updated_at TEXT,
+                spf_pinnacle_home REAL,
+                spf_pinnacle_draw REAL,
+                spf_pinnacle_away REAL,
+                UNIQUE(event_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ou_teams ON oddsfe_matches(team_home_name, team_away_name);
+        """)
+
+        # 从oddsfe_merged.db获取有Pinnacle O/U数据的近期赛事
+        rows = oddsfe_conn.execute("""
+            SELECT event_id, event_start_at, team_home_name, team_away_name,
+                   category_name, tournament_name,
+                   OVER_UNDER_prematch_PINNACLE_line,
+                   OVER_UNDER_prematch_PINNACLE_over,
+                   OVER_UNDER_prematch_PINNACLE_under,
+                   "1X2_prematch_PINNACLE_home",
+                   "1X2_prematch_PINNACLE_draw",
+                   "1X2_prematch_PINNACLE_away"
+            FROM oddsfe
+            WHERE event_start_at >= date('now', '-3 days')
+            AND OVER_UNDER_prematch_PINNACLE_line IS NOT NULL
+            AND OVER_UNDER_prematch_PINNACLE_line != ''
+        """).fetchall()
+
+        synced = 0
+        for row in rows:
+            try:
+                v2_conn.execute("""
+                    INSERT OR REPLACE INTO oddsfe_matches
+                    (event_id, event_start_at, team_home_name, team_away_name,
+                     category_name, tournament_name,
+                     ou_pinnacle_line, ou_pinnacle_over, ou_pinnacle_under,
+                     ou_pinnacle_updated_at,
+                     spf_pinnacle_home, spf_pinnacle_draw, spf_pinnacle_away)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), ?, ?, ?)
+                """, row)
+                synced += 1
+            except Exception:
+                pass
+
+        v2_conn.commit()
+        oddsfe_conn.close()
+        v2_conn.close()
+
+        return {'success': True, 'synced': synced}
+
+    except Exception as e:
+        logger.error(f'O/U同步到football_v2失败: {e}')
+        return {'success': False, 'error': str(e)}
+
+
+def _invalidate_stale_analysis(db_path: str, match_date: str):
+    """标记分析报告为stale — 当O/U赔率数据更新后旧分析可能过时"""
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        cursor = conn.cursor()
+
+        # 检查is_stale列是否存在
+        cols = {r[1] for r in cursor.execute("PRAGMA table_info(lottery_analysis_reports)").fetchall()}
+        if 'is_stale' not in cols:
+            conn.execute("ALTER TABLE lottery_analysis_reports ADD COLUMN is_stale INTEGER DEFAULT 0")
+
+        # 标记今日分析为stale
+        cursor.execute("""
+            UPDATE lottery_analysis_reports SET is_stale = 1
+            WHERE lottery_match_id IN (
+                SELECT lottery_match_id FROM lottery_matches WHERE match_date = ?
+            )
+            AND is_stale = 0
+        """, (match_date,))
+
+        count = cursor.rowcount
+        conn.commit()
+        conn.close()
+
+        if count > 0:
+            logger.info(f'标记{count}个分析报告为stale (O/U数据更新)')
+    except Exception as e:
+        logger.debug(f'标记stale失败: {e}')

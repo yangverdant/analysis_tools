@@ -176,6 +176,7 @@ class LotteryResult:
     bf_result: Optional[str] = None          # 比分结果
     bqc_result: Optional[str] = None         # 半全场结果
     rqspf_result: Optional[str] = None       # 让球胜平负结果
+    ou_result: Optional[str] = None          # 大小球结果
 
     draw_time: Optional[datetime] = None
     created_at: Optional[datetime] = None
@@ -186,7 +187,8 @@ class LotteryResult:
             PlayType.SPF: self.spf_result,
             PlayType.BF: self.bf_result,
             PlayType.BQC: self.bqc_result,
-            PlayType.RQSPF: self.rqspf_result
+            PlayType.RQSPF: self.rqspf_result,
+            PlayType.OVER_UNDER: self.ou_result
         }
         return result_map.get(play_type)
 
@@ -198,7 +200,8 @@ class LotteryResult:
             'away_goals_ft': self.away_goals_ft,
             'spf_result': self.spf_result,
             'bf_result': self.bf_result,
-            'bqc_result': self.bqc_result
+            'bqc_result': self.bqc_result,
+            'ou_result': self.ou_result
         }
 
 

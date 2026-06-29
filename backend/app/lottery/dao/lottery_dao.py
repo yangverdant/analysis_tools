@@ -114,8 +114,9 @@ class LotteryMatchDAO:
         cursor = conn.cursor()
 
         try:
+            # Use INSERT OR IGNORE + UPDATE to preserve bridge fields (beijing_time, oddsfe_event_id)
             cursor.execute("""
-                INSERT OR REPLACE INTO lottery_matches
+                INSERT OR IGNORE INTO lottery_matches
                 (lottery_match_id, match_id, home_team_id, away_team_id,
                  home_team_cn, away_team_cn, league_name_cn, match_num,
                  match_date, match_time, beijing_time, sell_status,
@@ -138,6 +139,34 @@ class LotteryMatchDAO:
                 json.dumps(match.get('play_types', [])),
                 match.get('handicap_line', 0)
             ))
+
+            if cursor.rowcount == 0:
+                # Row already exists — update only crawler fields, preserve bridge fields
+                cursor.execute("""
+                    UPDATE lottery_matches SET
+                        home_team_id = COALESCE(?, home_team_id),
+                        away_team_id = COALESCE(?, away_team_id),
+                        league_name_cn = COALESCE(?, league_name_cn),
+                        match_num = ?,
+                        handicap_line = ?,
+                        play_types = ?,
+                        sell_status = ?,
+                        sell_end_time = COALESCE(?, sell_end_time),
+                        match_time = COALESCE(?, match_time),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE lottery_match_id = ?
+                """, (
+                    match.get('home_team_id'),
+                    match.get('away_team_id'),
+                    match.get('league_name_cn'),
+                    match.get('match_num'),
+                    match.get('handicap_line', 0),
+                    json.dumps(match.get('play_types', [])),
+                    match.get('sell_status', 'selling'),
+                    match.get('sell_end_time'),
+                    match.get('match_time'),
+                    match['lottery_match_id']
+                ))
 
             conn.commit()
             return True
@@ -250,7 +279,7 @@ class PredictionDAO:
 
         try:
             cursor.execute("""
-                INSERT INTO lottery_predictions
+                INSERT OR REPLACE INTO lottery_predictions
                 (lottery_match_id, match_id, play_type, predictions,
                  recommendation, confidence, confidence_level,
                  has_value_bet, value_bets, features_json, weights_json, model_version)
@@ -398,7 +427,7 @@ class ReportDAO:
         try:
             cursor.execute("""
                 SELECT report_data, created_at FROM lottery_analysis_reports
-                WHERE lottery_match_id = ?
+                WHERE lottery_match_id = ? AND report_type IN ('prediction', 'full')
                 ORDER BY created_at DESC LIMIT 1
             """, (lottery_match_id,))
 
@@ -426,6 +455,17 @@ class ReportDAO:
             """, (lottery_match_id, match_id, json.dumps(report_data)))
 
             report_id = cursor.lastrowid
+            columns = {row[1] for row in cursor.execute("PRAGMA table_info(lottery_analysis_reports)").fetchall()}
+            if "is_stale" in columns:
+                cursor.execute(
+                    """
+                    UPDATE lottery_analysis_reports
+                    SET is_stale = CASE WHEN report_id = ? THEN 0 ELSE 1 END
+                    WHERE lottery_match_id = ?
+                      AND report_type IN ('prediction', 'full')
+                    """,
+                    (report_id, lottery_match_id),
+                )
             conn.commit()
             return report_id
 

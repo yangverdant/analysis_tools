@@ -53,13 +53,22 @@ class Config:
     def db_path(self) -> Path:
         """数据库路径(绝对路径)"""
         path = self._config.get("database", {}).get("path", "data/football_v2.db")
-        return PROJECT_ROOT / path
+        expanded = Path(os.path.expandvars(str(path))).expanduser()
+        if expanded.is_absolute():
+            return expanded.resolve()
+        return (PROJECT_ROOT / expanded).resolve()
 
     @property
     def db_backup_dir(self) -> Path:
         """数据库备份目录"""
-        path = self._config.get("database", {}).get("backup_dir", "data/backups")
-        return PROJECT_ROOT / path
+        path = os.environ.get(
+            "FOOTBALL_BACKUP_DIR",
+            self._config.get("database", {}).get("backup_dir", "../football_backups/app_backups"),
+        )
+        expanded = Path(os.path.expandvars(str(path))).expanduser()
+        if expanded.is_absolute():
+            return expanded.resolve()
+        return (PROJECT_ROOT / expanded).resolve()
 
     # === 调度器配置 ===
     @property

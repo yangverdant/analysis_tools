@@ -147,11 +147,19 @@ def run_mode(mode: str, db_path: str = None):
 
     today = today_beijing()
 
-    # 如果有恢复的断点, 从该节点继续
+    # 如果有恢复的断点, 从断点继续
+    # 但如果断点是perceive之后的节点且日期是昨天的, 说明昨天没跑完
+    # 今天应该从collect重新开始(需要采集新比赛)
     if recovery.get('recovered_node') and mode in ('morning', 'full'):
         node = recovery['recovered_node']
-        logger.info('从断点恢复: %s', node)
-        state = CycleState(date=today, current_node=node)
+        # 如果断点在perceive之后, 说明前一天的collect/analyze已完成
+        # 但今天是新的一天, 需要重新从collect开始采集新比赛
+        if node in ('learn', 'validate', 'clv_update', 'push', 'analyze', 'classify', 'intel'):
+            logger.info('断点 %s 是前一天残留, 今日从collect重新开始', node)
+            state = CycleState(date=today, current_node='collect')
+        else:
+            logger.info('从断点恢复: %s', node)
+            state = CycleState(date=today, current_node=node)
     else:
         # 检查今天是否已有完成的状态
         existing = dao.load(today)
@@ -181,7 +189,7 @@ def run_mode(mode: str, db_path: str = None):
         machine.run_cycle(state, stop_at='learn')
     elif mode == 'morning':
         # 完整上午: perceive → collect → ... → push → clv_update
-        machine.run_cycle(state, stop_at='clv_update')
+        machine.run_cycle(state)
     elif mode == 'full':
         machine.run_cycle(state)
     else:

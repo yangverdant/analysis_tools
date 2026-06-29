@@ -8,11 +8,20 @@
 - langchain/: AI 分析 (暂时禁用)
 - data_sources/: 数据源管理
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 import os
 import sys
+import subprocess
+from datetime import datetime, timedelta
+from threading import Lock
+
+BACKEND_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+PROJECT_ROOT = os.path.abspath(os.path.join(BACKEND_DIR, '..'))
+for path in (PROJECT_ROOT, BACKEND_DIR):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
 from backend.app.core.time_utils import today_beijing, tomorrow_beijing
 import logging
@@ -22,9 +31,13 @@ logger = logging.getLogger(__name__)
 
 # 数据库路径 — 优先使用环境变量(云部署), 否则用相对路径(本地开发)
 DATABASE_PATH = os.environ.get('DB_PATH',
-    os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'football_v2.db'))
+    os.path.join(PROJECT_ROOT, 'data', 'football_v2.db'))
+ODDSFE_DB_PATH = os.environ.get(
+    'ODDSFE_DB_PATH',
+    os.path.join(PROJECT_ROOT, 'fetchers', 'odds_feed_api', 'oddsfe_merged.db')
+)
 LINKAGE_PATH = os.environ.get('LINKAGE_PATH',
-    os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'linkage'))
+    os.path.join(PROJECT_ROOT, 'data', 'linkage'))
 
 # 国家中文名映射(补充DB中country_cn为空的记录)
 _COUNTRY_CN = {
@@ -137,6 +150,13 @@ def get_db():
     return conn
 
 
+def _table_columns(cursor, table_name: str) -> set:
+    try:
+        return {row[1] for row in cursor.execute(f"PRAGMA table_info({table_name})").fetchall()}
+    except Exception:
+        return set()
+
+
 # 创建 FastAPI 应用
 app = FastAPI(
     title="足球数据分析 API",
@@ -166,7 +186,8 @@ from app.routers import (
     leagues_router,
     cups_router,
     sync_router,
-    rankings_router
+    rankings_router,
+    user_router
 )
 app.include_router(matches_router)
 app.include_router(teams_router)
@@ -174,6 +195,7 @@ app.include_router(leagues_router)
 app.include_router(cups_router)
 app.include_router(sync_router)
 app.include_router(rankings_router)
+app.include_router(user_router)
 
 from app.pipeline import pipeline_router
 app.include_router(pipeline_router)
@@ -181,6 +203,13 @@ app.include_router(pipeline_router)
 # 体彩分析路由 (新增)
 from app.lottery.routers.lottery import router as lottery_router
 app.include_router(lottery_router)
+
+# Match intelligence orchestration route
+from app.intelligence import intelligence_router
+app.include_router(intelligence_router)
+
+from app.worldcup import worldcup_router
+app.include_router(worldcup_router)
 
 # LangChain AI 路由 (暂时禁用，需要修复版本兼容)
 # from app.langchain.routes import router as langchain_router
@@ -582,7 +611,7 @@ async def cycle_run(mode: str):
     import subprocess
     import sys
 
-    valid_modes = ['perceive', 'collect', 'analyze', 'push', 'clv', 'validate', 'learn', 'morning', 'full']
+    valid_modes = ['perceive', 'collect', 'classify', 'intel', 'analyze', 'push', 'clv', 'validate', 'learn', 'morning', 'full']
     if mode not in valid_modes:
         return {"success": False, "error": f"Invalid mode: {mode}"}
 
@@ -606,25 +635,38 @@ async def cycle_predictions(date: str = None):
         conn = get_db()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        report_cols = _table_columns(cursor, "lottery_analysis_reports")
+        active_report_filter = "AND COALESCE(is_stale, 0) = 0" if "is_stale" in report_cols else ""
 
         # 北京时间窗口: today + tomorrow凌晨
         from backend.app.core.time_utils import today_beijing, tomorrow_beijing
         today = date or today_beijing()
         tomorrow = tomorrow_beijing()
 
-        cursor.execute("""
+        # 只返回未开始的比赛（match_datetime > now）
+        from datetime import datetime
+        now = datetime.now().strftime('%Y-%m-%d %H:%M')
+        cursor.execute(f"""
             SELECT lar.lottery_match_id, lar.report_data,
                    lm.home_team_cn, lm.away_team_cn, lm.match_date, lm.match_time,
                    lm.league_name_cn, lm.home_team_id, lm.away_team_id
             FROM lottery_analysis_reports lar
+            JOIN (
+                SELECT MAX(report_id) AS report_id
+                FROM lottery_analysis_reports
+                WHERE report_type = 'prediction'
+                {active_report_filter}
+                GROUP BY lottery_match_id
+            ) latest ON latest.report_id = lar.report_id
             JOIN lottery_matches lm ON lar.lottery_match_id = lm.lottery_match_id
             WHERE (
                 lm.match_date = ?
                 OR (lm.match_date = ? AND substr(lm.match_time, 1, 2) < '12')
             )
             AND lar.report_type = 'prediction'
+            AND (lm.match_date || ' ' || substr(lm.match_time, 1, 5)) > ?
             ORDER BY lm.match_date, lm.match_time
-        """, (today, tomorrow))
+        """, (today, tomorrow, now))
 
         predictions = []
         for row in cursor.fetchall():
@@ -668,15 +710,24 @@ async def cycle_top3():
         conn = get_db()
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
+        report_cols = _table_columns(cursor, "lottery_analysis_reports")
+        active_report_filter = "AND COALESCE(is_stale, 0) = 0" if "is_stale" in report_cols else ""
 
         # 从预测报告中找最高置信度的推荐(北京时间窗口)
         from backend.app.core.time_utils import today_beijing, tomorrow_beijing
         _today = today_beijing()
         _tomorrow = tomorrow_beijing()
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT lar.report_data, lm.home_team_cn, lm.away_team_cn,
                    lm.league_name_cn, lm.match_date
             FROM lottery_analysis_reports lar
+            JOIN (
+                SELECT MAX(report_id) AS report_id
+                FROM lottery_analysis_reports
+                WHERE report_type = 'prediction'
+                {active_report_filter}
+                GROUP BY lottery_match_id
+            ) latest ON latest.report_id = lar.report_id
             JOIN lottery_matches lm ON lar.lottery_match_id = lm.lottery_match_id
             WHERE (
                 lm.match_date = ?
@@ -982,12 +1033,17 @@ async def get_analysis_detail(lottery_match_id: str):
         match_info = dict(match_row)
 
         # Get prediction report (prefer prediction type, then full)
+        report_cols = _table_columns(conn, "lottery_analysis_reports")
+        active_report_filter = "AND COALESCE(is_stale, 0) = 0" if "is_stale" in report_cols else ""
+        report_row = None
         for report_type in ['prediction', 'full']:
-            cursor = conn.execute("""
+            cursor = conn.execute(f"""
                 SELECT report_data, report_type, created_at
                 FROM lottery_analysis_reports
                 WHERE lottery_match_id = ? AND report_type = ?
-                ORDER BY created_at DESC LIMIT 1
+                {active_report_filter}
+                ORDER BY datetime(created_at) DESC, report_id DESC
+                LIMIT 1
             """, (lottery_match_id, report_type))
             report_row = cursor.fetchone()
             if report_row:
@@ -1187,14 +1243,495 @@ _scheduler = None
 def _start_daily_scheduler():
     """启动日循环调度器"""
     global _scheduler
+    if str(os.environ.get("DISABLE_DAILY_SCHEDULER", "")).strip().lower() in {"1", "true", "yes", "on"}:
+        logger.info("Daily scheduler disabled by DISABLE_DAILY_SCHEDULER")
+        return
     try:
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.cron import CronTrigger
+        from apscheduler.triggers.interval import IntervalTrigger
     except ImportError:
         logger.warning("APScheduler not installed, daily cycle scheduler disabled")
         return
 
-    db_path = str(Path(__file__).parent.parent.parent / "data" / "football_v2.db")
+    db_path = DATABASE_PATH
+    job_locks = {
+        "rolling_collection": Lock(),
+        "historical_backfill": Lock(),
+        "intelligence_gap_fill": Lock(),
+        "automation_center": Lock(),
+    }
+
+    def _ensure_data_foundation_tables():
+        """Ensure durable run/evidence tables exist before background jobs start."""
+        try:
+            conn = sqlite3.connect(db_path, timeout=10)
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS collection_runs (
+                    run_id TEXT PRIMARY KEY,
+                    trigger_source TEXT NOT NULL DEFAULT 'manual',
+                    run_type TEXT NOT NULL,
+                    match_date TEXT,
+                    status TEXT NOT NULL DEFAULT 'running',
+                    started_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    finished_at TEXT,
+                    summary_json TEXT NOT NULL DEFAULT '{}',
+                    error TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_collection_runs_date ON collection_runs(match_date);
+                CREATE INDEX IF NOT EXISTS idx_collection_runs_status ON collection_runs(status);
+
+                CREATE TABLE IF NOT EXISTS source_artifacts (
+                    artifact_id TEXT PRIMARY KEY,
+                    run_id TEXT,
+                    source_name TEXT NOT NULL,
+                    source_type TEXT,
+                    entity_type TEXT,
+                    entity_id TEXT,
+                    payload_json TEXT NOT NULL,
+                    payload_hash TEXT,
+                    confidence REAL DEFAULT 0.5,
+                    captured_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_source_artifacts_entity ON source_artifacts(entity_type, entity_id);
+                CREATE INDEX IF NOT EXISTS idx_source_artifacts_source ON source_artifacts(source_name, captured_at);
+
+                CREATE TABLE IF NOT EXISTS source_entity_mappings (
+                    mapping_id TEXT PRIMARY KEY,
+                    entity_type TEXT NOT NULL,
+                    canonical_id TEXT,
+                    source_name TEXT NOT NULL,
+                    source_entity_id TEXT,
+                    source_entity_name TEXT,
+                    confidence REAL DEFAULT 0.5,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_source_entity_mapping_unique
+                    ON source_entity_mappings(entity_type, source_name, source_entity_id);
+
+                CREATE TABLE IF NOT EXISTS match_context_snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    match_key TEXT NOT NULL,
+                    snapshot_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    competition_context_json TEXT NOT NULL DEFAULT '{}',
+                    odds_context_json TEXT NOT NULL DEFAULT '{}',
+                    intel_context_json TEXT NOT NULL DEFAULT '{}',
+                    data_quality_json TEXT NOT NULL DEFAULT '{}'
+                );
+                CREATE INDEX IF NOT EXISTS idx_context_snapshots_match
+                    ON match_context_snapshots(match_key, snapshot_time);
+
+                CREATE TABLE IF NOT EXISTS match_feature_snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    match_key TEXT NOT NULL,
+                    snapshot_time TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    feature_json TEXT NOT NULL DEFAULT '{}',
+                    model_version TEXT,
+                    source_report_id TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_feature_snapshots_match
+                    ON match_feature_snapshots(match_key, snapshot_time);
+
+                CREATE TABLE IF NOT EXISTS post_match_reviews (
+                    review_id TEXT PRIMARY KEY,
+                    match_key TEXT NOT NULL,
+                    play_type TEXT,
+                    predicted_result TEXT,
+                    actual_result TEXT,
+                    is_correct INTEGER,
+                    attribution TEXT,
+                    review_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_post_match_reviews_match
+                    ON post_match_reviews(match_key, play_type);
+
+                CREATE TABLE IF NOT EXISTS similar_match_cases (
+                    case_id TEXT PRIMARY KEY,
+                    match_key TEXT NOT NULL,
+                    play_type TEXT,
+                    similar_match_key TEXT NOT NULL,
+                    similarity_score REAL NOT NULL,
+                    similarity_json TEXT NOT NULL DEFAULT '{}',
+                    outcome_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_similar_match_cases_match
+                    ON similar_match_cases(match_key, similarity_score);
+                CREATE INDEX IF NOT EXISTS idx_similar_match_cases_play
+                    ON similar_match_cases(play_type, match_key, similarity_score);
+
+                CREATE TABLE IF NOT EXISTS lottery_revalidation_queue (
+                    queue_id TEXT PRIMARY KEY,
+                    correction_id TEXT NOT NULL,
+                    lottery_match_id TEXT NOT NULL,
+                    reason TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    processed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_lottery_revalidation_status
+                    ON lottery_revalidation_queue(status, created_at);
+                """
+            )
+            conn.execute(
+                """
+                UPDATE collection_runs
+                SET status = 'interrupted',
+                    finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP),
+                    error = COALESCE(error, 'Marked interrupted during service startup')
+                WHERE status = 'running'
+                """
+            )
+            has_intelligence_runs = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='intelligence_runs'"
+            ).fetchone()
+            if has_intelligence_runs:
+                conn.execute(
+                    """
+                    UPDATE intelligence_runs
+                    SET status = 'interrupted',
+                        finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP),
+                        error = COALESCE(error, 'Marked interrupted during service startup')
+                    WHERE status = 'running'
+                    """
+                )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.warning("Auto-loop foundation schema check failed: %s", e)
+
+    _ensure_data_foundation_tables()
+
+    def _run_locked(lock_key, job_name, fn):
+        lock = job_locks[lock_key]
+        if not lock.acquire(blocking=False):
+            logger.info("%s skipped: previous run still active", job_name)
+            return None
+        try:
+            return fn()
+        except Exception as e:
+            logger.error("%s failed: %s", job_name, e, exc_info=True)
+            return None
+        finally:
+            lock.release()
+
+    def _beijing_date(offset_days=0):
+        from backend.app.core.time_utils import now_beijing
+
+        return (now_beijing() + timedelta(days=offset_days)).date()
+
+    def _collection_running(run_type, max_age_minutes=90):
+        try:
+            conn = sqlite3.connect(db_path, timeout=10)
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                """
+                SELECT started_at
+                FROM collection_runs
+                WHERE run_type = ?
+                  AND status = 'running'
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (run_type,),
+            ).fetchone()
+            conn.close()
+            if not row:
+                return False
+            started_at = str(row["started_at"] or "")[:19]
+            try:
+                started = datetime.strptime(started_at, "%Y-%m-%d %H:%M:%S")
+                return started >= datetime.now() - timedelta(minutes=max_age_minutes)
+            except ValueError:
+                return True
+        except Exception:
+            return False
+
+    def _run_lottery_analysis_for_dates(date_values, limit=12):
+        try:
+            from backend.app.core.analyze import analyze_single
+
+            conn = sqlite3.connect(db_path, timeout=10)
+            conn.row_factory = sqlite3.Row
+            report_cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(lottery_analysis_reports)").fetchall()
+            }
+            stale_expr = (
+                "COALESCE((SELECT COALESCE(ar.is_stale, 0) FROM lottery_analysis_reports ar "
+                "WHERE ar.lottery_match_id = lm.lottery_match_id AND ar.report_type IN ('prediction', 'full') "
+                "ORDER BY datetime(ar.created_at) DESC, ar.report_id DESC LIMIT 1), 0)"
+                if "is_stale" in report_cols
+                else "0"
+            )
+            has_intelligence_tables = (
+                conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='intelligence_jobs'"
+                ).fetchone() is not None
+                and conn.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='intelligence_packages'"
+                ).fetchone() is not None
+            )
+            latest_intelligence_expr = (
+                """
+                           (
+                               SELECT MAX(ip.updated_at)
+                               FROM intelligence_jobs ij
+                               JOIN intelligence_packages ip ON ip.job_id = ij.job_id
+                               WHERE ij.lottery_match_id = lm.lottery_match_id
+                           ) AS latest_intelligence_at,
+                """
+                if has_intelligence_tables
+                else "NULL AS latest_intelligence_at,"
+            )
+            placeholders = ",".join(["?"] * len(date_values))
+            rows = conn.execute(
+                f"""
+                SELECT *
+                FROM (
+                    SELECT lm.lottery_match_id,
+                           lm.league_name_cn,
+                           lm.sell_status,
+                           COALESCE((
+                               SELECT COUNT(*)
+                               FROM lottery_analysis_reports ar
+                               WHERE ar.lottery_match_id = lm.lottery_match_id
+                                 AND ar.report_type IN ('prediction', 'full')
+                           ), 0) AS report_count,
+                           {stale_expr} AS stale_count,
+                           (
+                               SELECT MAX(ar.created_at)
+                               FROM lottery_analysis_reports ar
+                               WHERE ar.lottery_match_id = lm.lottery_match_id
+                                 AND ar.report_type IN ('prediction', 'full')
+                           ) AS latest_report_at,
+                           {latest_intelligence_expr}
+                           (
+                               SELECT ar.report_data
+                               FROM lottery_analysis_reports ar
+                               WHERE ar.lottery_match_id = lm.lottery_match_id
+                                 AND ar.report_type IN ('prediction', 'full')
+                               ORDER BY ar.created_at DESC, ar.rowid DESC
+                               LIMIT 1
+                           ) AS latest_report_data
+                    FROM lottery_matches lm
+                    WHERE lm.home_team_id IS NOT NULL
+                      AND lm.away_team_id IS NOT NULL
+                      AND substr(COALESCE(lm.beijing_time, lm.match_date), 1, 10) IN ({placeholders})
+                ) q
+                WHERE report_count = 0
+                   OR stale_count > 0
+                   OR (
+                        latest_intelligence_at IS NOT NULL
+                        AND latest_report_at IS NOT NULL
+                        AND latest_intelligence_at > latest_report_at
+                        AND COALESCE(sell_status, '') NOT IN ('finished')
+                        AND latest_report_at < datetime('now', '-2 hours')
+                      )
+                   OR (
+                        (league_name_cn LIKE '%世界杯%' OR league_name_cn LIKE '%World Cup%')
+                        AND COALESCE(sell_status, '') NOT IN ('finished')
+                        AND latest_report_at IS NOT NULL
+                        AND latest_report_at < datetime('now', '-6 hours')
+                      )
+                   OR (
+                        (league_name_cn LIKE '%世界杯%' OR league_name_cn LIKE '%World Cup%')
+                        AND latest_report_data LIKE '%offline_fallback%'
+                      )
+                ORDER BY COALESCE(latest_report_at, '1970-01-01') ASC, lottery_match_id
+                LIMIT ?
+                """,
+                [str(item) for item in date_values] + [limit],
+            ).fetchall()
+            conn.close()
+            analyzed = 0
+            for row in rows:
+                if analyze_single(db_path, row["lottery_match_id"]):
+                    analyzed += 1
+                    try:
+                        cleanup = sqlite3.connect(db_path, timeout=10)
+                        cleanup_cols = {
+                            col[1]
+                            for col in cleanup.execute("PRAGMA table_info(lottery_analysis_reports)").fetchall()
+                        }
+                        if "is_stale" in cleanup_cols:
+                            latest_report = cleanup.execute(
+                                """
+                                SELECT report_id
+                                FROM lottery_analysis_reports
+                                WHERE lottery_match_id = ?
+                                  AND report_type IN ('prediction', 'full')
+                                ORDER BY datetime(created_at) DESC, report_id DESC
+                                LIMIT 1
+                                """,
+                                (row["lottery_match_id"],),
+                            ).fetchone()
+                            latest_report_id = latest_report[0] if latest_report else None
+                            cleanup.execute(
+                                """
+                                UPDATE lottery_analysis_reports
+                                SET is_stale = CASE WHEN report_id = ? THEN 0 ELSE 1 END
+                                WHERE lottery_match_id = ?
+                                  AND report_type IN ('prediction', 'full')
+                                """,
+                                (latest_report_id, row["lottery_match_id"]),
+                            )
+                            cleanup.commit()
+                        cleanup.close()
+                    except Exception:
+                        pass
+            return {"candidates": len(rows), "analyzed": analyzed, "reason": "missing/stale/world_cup_refresh"}
+        except Exception as e:
+            logger.error("Rolling analysis failed: %s", e)
+            return {"candidates": 0, "analyzed": 0, "error": str(e)}
+
+    def _find_historical_backfill_date(lookback_days=180):
+        try:
+            today = _beijing_date(0).isoformat()
+            start = (_beijing_date(0) - timedelta(days=lookback_days)).isoformat()
+            conn = sqlite3.connect(db_path, timeout=10)
+            conn.row_factory = sqlite3.Row
+            has_source_artifacts = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_artifacts'"
+            ).fetchone() is not None
+            event_cache_join = ""
+            event_cache_select = "0 AS missing_event_cache"
+            event_cache_having = ""
+            if has_source_artifacts:
+                event_cache_join = """
+                LEFT JOIN (
+                    SELECT DISTINCT entity_id
+                    FROM source_artifacts
+                    WHERE source_name = 'oddsfe'
+                      AND entity_type = 'event'
+                ) sea ON sea.entity_id = CAST(lm.oddsfe_event_id AS TEXT)
+                """
+                event_cache_select = """
+                       SUM(CASE WHEN lm.oddsfe_event_id IS NOT NULL
+                                 AND lm.oddsfe_event_id <> ''
+                                 AND sea.entity_id IS NULL
+                                THEN 1 ELSE 0 END) AS missing_event_cache
+                """
+                event_cache_having = " OR missing_event_cache > 0"
+            row = conn.execute(
+                f"""
+                SELECT substr(COALESCE(lm.beijing_time, lm.match_date), 1, 10) AS d,
+                       SUM(CASE WHEN lo.lottery_match_id IS NULL
+                                 THEN 1 ELSE 0 END) AS missing_odds,
+                       SUM(CASE WHEN lr.lottery_match_id IS NULL
+                                 AND lm.oddsfe_event_id IS NOT NULL
+                                 AND lm.oddsfe_event_id <> ''
+                                 THEN 1 ELSE 0 END) AS missing_results,
+                       SUM(CASE WHEN ar.lottery_match_id IS NULL
+                                 AND lm.home_team_id IS NOT NULL
+                                 AND lm.away_team_id IS NOT NULL
+                                THEN 1 ELSE 0 END) AS missing_analysis,
+                       SUM(CASE WHEN lr.lottery_match_id IS NOT NULL
+                                 AND ar.lottery_match_id IS NOT NULL
+                                 AND lv.lottery_match_id IS NULL
+                                THEN 1 ELSE 0 END) AS missing_validation,
+                       SUM(CASE WHEN lr.lottery_match_id IS NOT NULL
+                                 AND ip.job_id IS NULL
+                                THEN 1 ELSE 0 END) AS missing_intelligence,
+                       {event_cache_select}
+                FROM lottery_matches lm
+                LEFT JOIN lottery_results lr ON lr.lottery_match_id = lm.lottery_match_id
+                LEFT JOIN lottery_analysis_reports ar
+                  ON ar.lottery_match_id = lm.lottery_match_id
+                 AND ar.report_type IN ('prediction', 'full')
+                LEFT JOIN (
+                    SELECT DISTINCT lottery_match_id
+                    FROM lottery_odds
+                    WHERE play_type IN ('spf', 'rqspf')
+                ) lo ON lo.lottery_match_id = lm.lottery_match_id
+                LEFT JOIN lottery_validation lv ON lv.lottery_match_id = lm.lottery_match_id
+                LEFT JOIN intelligence_jobs ij ON ij.lottery_match_id = lm.lottery_match_id
+                LEFT JOIN intelligence_packages ip ON ip.job_id = ij.job_id
+                {event_cache_join}
+                WHERE substr(COALESCE(lm.beijing_time, lm.match_date), 1, 10) >= ?
+                  AND substr(COALESCE(lm.beijing_time, lm.match_date), 1, 10) < ?
+                GROUP BY d
+                HAVING missing_odds > 0
+                    OR missing_results > 0
+                    OR missing_analysis > 0
+                    OR missing_validation > 0
+                    OR missing_intelligence > 0
+                    {event_cache_having}
+                ORDER BY d DESC
+                LIMIT 1
+                """,
+                (start, today),
+            ).fetchone()
+            conn.close()
+            return dict(row) if row else None
+        except Exception as e:
+            logger.error("Historical backfill date selection failed: %s", e)
+            return None
+
+    def _run_validation_for_date(date_value):
+        try:
+            from backend.app.core.validate import _validate_predictions
+            from backend.app.lottery.services.auto_gap_runner import LotteryAutoGapRunner
+
+            result = _validate_predictions(db_path, [date_value]) or {}
+            result["reanalysis_change_settlement"] = LotteryAutoGapRunner(
+                db_path,
+                ODDSFE_DB_PATH,
+            ).settle_reanalysis_changes(date_value, date_value)
+            return result
+        except Exception as e:
+            logger.error("Validation backfill failed for %s: %s", date_value, e)
+            return {"error": str(e)}
+
+    def _run_pending_revalidations(limit=10):
+        try:
+            conn = sqlite3.connect(db_path, timeout=10)
+            conn.row_factory = sqlite3.Row
+            has_queue = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='lottery_revalidation_queue'"
+            ).fetchone()
+            if not has_queue:
+                conn.close()
+                return {"skipped": True, "reason": "queue_missing"}
+            rows = conn.execute(
+                """
+                SELECT q.queue_id, q.lottery_match_id,
+                       substr(COALESCE(lm.beijing_time, lm.match_date), 1, 10) AS match_date
+                FROM lottery_revalidation_queue q
+                JOIN lottery_matches lm ON lm.lottery_match_id = q.lottery_match_id
+                WHERE q.status = 'pending'
+                ORDER BY q.created_at ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            conn.close()
+            if not rows:
+                return {"pending": 0, "processed": 0}
+
+            dates = sorted({row["match_date"] for row in rows if row["match_date"]})
+            results = []
+            for date_value in dates:
+                results.append({"date": date_value, **_run_validation_for_date(date_value)})
+
+            conn = sqlite3.connect(db_path, timeout=10)
+            conn.executemany(
+                """
+                UPDATE lottery_revalidation_queue
+                SET status = 'processed', processed_at = CURRENT_TIMESTAMP
+                WHERE queue_id = ?
+                """,
+                [(row["queue_id"],) for row in rows],
+            )
+            conn.commit()
+            conn.close()
+            return {"pending": len(rows), "processed": len(rows), "results": results}
+        except Exception as e:
+            logger.error("Pending revalidation failed: %s", e)
+            return {"error": str(e)}
 
     def _run_cycle_mode(mode):
         """在子线程中运行日循环"""
@@ -1211,6 +1748,526 @@ def _start_daily_scheduler():
                 logger.debug('Daily cycle [%s] stderr: %s', mode, result.stderr[:500])
         except Exception as e:
             logger.error('Daily cycle [%s] failed: %s', mode, e)
+
+    def _run_intelligence(offset_days=0, include_external=True, trigger_source='scheduler'):
+        """Run match intelligence pipeline for today/tomorrow."""
+        try:
+            from app.intelligence.service import IntelligenceService
+            from backend.app.core.time_utils import today_beijing, tomorrow_beijing
+
+            if offset_days == 0:
+                target_date = today_beijing()
+            elif offset_days == 1:
+                target_date = tomorrow_beijing()
+            else:
+                from datetime import datetime, timedelta
+
+                target_date = (datetime.strptime(today_beijing(), "%Y-%m-%d") + timedelta(days=offset_days)).strftime("%Y-%m-%d")
+
+            collectors = ['weather', 'team_news', 'injuries_suspensions', 'expected_lineup'] if include_external else None
+            result = IntelligenceService(db_path).run_daily_logged(
+                match_date=target_date,
+                include_external=include_external,
+                collectors=collectors,
+                network=True,
+                force=False,
+                trigger_source=trigger_source,
+            )
+            jobs_count = len(result.get('summary', {}).get('results', []))
+            logger.info('Intelligence pipeline [%s] date=%s jobs=%d', trigger_source, target_date, jobs_count)
+        except Exception as e:
+            logger.error('Intelligence pipeline [%s] failed: %s', trigger_source, e)
+
+    def _run_intelligence_reviews(offset_days=-1, play_type='spf', trigger_source='scheduler_review'):
+        """Create post-match intelligence reviews after results validation."""
+        try:
+            from datetime import datetime, timedelta
+            from app.intelligence.service import IntelligenceService
+            from backend.app.core.time_utils import today_beijing
+
+            target_date = (datetime.strptime(today_beijing(), "%Y-%m-%d") + timedelta(days=offset_days)).strftime("%Y-%m-%d")
+            result = IntelligenceService(db_path).auto_review_for_date(match_date=target_date, play_type=play_type)
+            logger.info(
+                'Intelligence reviews [%s] date=%s reviewed=%d pending=%d failed=%d',
+                trigger_source,
+                target_date,
+                len(result.get('reviewed', [])),
+                len(result.get('pending', [])),
+                len(result.get('failed', [])),
+            )
+            return result
+        except Exception as e:
+            logger.error('Intelligence reviews [%s] failed: %s', trigger_source, e)
+            return {"error": str(e)}
+
+    def _run_intelligence_gap_fill(
+        start_offset=-1,
+        end_offset=1,
+        start_date=None,
+        end_date=None,
+        network=True,
+        force=False,
+        limit=8,
+        collectors=None,
+        trigger_source='scheduler_intelligence_gap_fill',
+    ):
+        """Fill prioritized missing or low-confidence intelligence requirements in small batches."""
+        def _job():
+            try:
+                from app.intelligence.service import IntelligenceService
+
+                gap_start_date = start_date or _beijing_date(start_offset).isoformat()
+                gap_end_date = end_date or _beijing_date(end_offset).isoformat()
+                selected_collectors = collectors or [
+                    'injuries_suspensions',
+                    'team_news',
+                    'expected_lineup',
+                    'weather',
+                ]
+                result = IntelligenceService(db_path).fill_gaps_logged(
+                    start_date=gap_start_date,
+                    end_date=gap_end_date,
+                    collectors=selected_collectors,
+                    network=network,
+                    force=force,
+                    include_optional=True,
+                    include_builtin=True,
+                    limit=limit,
+                    trigger_source=trigger_source,
+                )
+                summary = result.get('summary', result)
+                logger.info(
+                    'Intelligence gap fill [%s] range=%s..%s processed=%s planned=%s',
+                    trigger_source,
+                    gap_start_date,
+                    gap_end_date,
+                    summary.get('processed'),
+                    summary.get('planned_candidates'),
+                )
+                return result
+            except Exception as e:
+                logger.error('Intelligence gap fill [%s] failed: %s', trigger_source, e)
+                return {"error": str(e)}
+
+        return _run_locked("intelligence_gap_fill", "intelligence_gap_fill", _job)
+
+    def _run_similar_case_refresh(trigger_source='scheduler_similar_cases'):
+        """Refresh rule-based similar cases from the latest feature snapshots/reviews."""
+        try:
+            from scripts.build_similar_match_cases import build_cases
+
+            summary = {
+                'spf': build_cases(Path(db_path), play_type='spf', top_k=5, min_score=0.68),
+                'rqspf': build_cases(Path(db_path), play_type='rqspf', top_k=5, min_score=0.66),
+                'bqc': build_cases(Path(db_path), play_type='bqc', top_k=5, min_score=0.64),
+                'ou': build_cases(Path(db_path), play_type='ou', top_k=5, min_score=0.66),
+                'bf': build_cases(Path(db_path), play_type='bf', top_k=5, min_score=0.62),
+            }
+            logger.info('Similar cases [%s] refreshed: %s', trigger_source, summary)
+            return summary
+        except Exception as e:
+            logger.error('Similar cases [%s] failed: %s', trigger_source, e)
+            return {"error": str(e)}
+
+    def _run_foundation_backfill(trigger_source='scheduler_foundation_backfill', limit=500, include_mappings=False):
+        """Idempotently backfill durable snapshots/reviews from existing reports and validations."""
+        try:
+            from scripts.backfill_data_foundation import (
+                backfill_mappings,
+                backfill_reviews,
+                backfill_snapshots,
+                connect,
+            )
+            from backend.app.data_access.foundation_dao import FoundationDAO
+
+            dao = FoundationDAO(db_path)
+            conn = connect(Path(db_path))
+            try:
+                row_limit = limit or None
+                summary = {
+                    "mappings": backfill_mappings(conn, dao, row_limit) if include_mappings else 0,
+                    "reviews": backfill_reviews(conn, dao, row_limit),
+                    "snapshots": backfill_snapshots(conn, dao, row_limit),
+                }
+            finally:
+                conn.close()
+            logger.info("Foundation backfill [%s] completed: %s", trigger_source, summary)
+            return summary
+        except Exception as e:
+            logger.error("Foundation backfill [%s] failed: %s", trigger_source, e)
+            return {"error": str(e)}
+
+    def _run_foundation_snapshot_cleanup(trigger_source='scheduler_snapshot_cleanup'):
+        """Remove duplicate durable snapshot rows without creating scheduled backups."""
+        try:
+            from scripts.cleanup_foundation_snapshots import cleanup_snapshots
+
+            summary = cleanup_snapshots(Path(db_path), apply=True, backup=False, vacuum=False)
+            logger.info("Foundation snapshot cleanup [%s] completed: %s", trigger_source, summary)
+            return summary
+        except Exception as e:
+            logger.error("Foundation snapshot cleanup [%s] failed: %s", trigger_source, e)
+            return {"error": str(e)}
+
+    def _foundation_backfill_changed(summary):
+        try:
+            return sum(int(summary.get(key) or 0) for key in ("mappings", "reviews", "snapshots")) > 0
+        except Exception:
+            return False
+
+    def _run_learning_refresh(trigger_source='scheduler_learning_refresh', limit=0):
+        """Refresh the learning foundation and rebuild similar cases in one auditable job."""
+        from backend.app.data_access.foundation_dao import FoundationDAO
+
+        foundation = FoundationDAO(db_path)
+        run_id = foundation.start_run(
+            run_type="learning_refresh",
+            match_date=today_beijing(),
+            trigger_source=trigger_source,
+            summary={"stage": "start"},
+        )
+        summary = {}
+        try:
+            summary["foundation_backfill"] = _run_foundation_backfill(
+                trigger_source,
+                limit=limit,
+                include_mappings=True,
+            )
+            summary["snapshot_cleanup"] = _run_foundation_snapshot_cleanup(
+                trigger_source + "_snapshot_cleanup"
+            )
+            summary["similar_cases"] = _run_similar_case_refresh(trigger_source + "_similar_cases")
+            foundation.finish_run(run_id, status="success", summary=summary)
+            return summary
+        except Exception as e:
+            foundation.finish_run(run_id, status="failed", summary=summary, error=str(e))
+            logger.error("Learning refresh [%s] failed: %s", trigger_source, e)
+            return {"error": str(e), **summary}
+
+    def _run_rolling_collection():
+        """Continuously refresh current live/upcoming/recent matches in small batches."""
+        def _job():
+            from backend.app.data_access.foundation_dao import FoundationDAO
+            from backend.app.core.collect import _update_match_status
+            from backend.app.lottery.services.oddsfe_event_sync import OddsfeEventDetailSync
+            from backend.app.lottery.services.oddsfe_ou_line_sync import OddsfeOuLineSync
+
+            # Yesterday settles late results, today/tomorrow drive live work, and
+            # +2 days lets the cockpit prepare odds, intelligence and analysis early.
+            target_dates = [_beijing_date(offset) for offset in (-1, 0, 1, 2)]
+            summary = {"sporttery": [], "status": {}, "oddsfe": {}, "oddsfe_ou": {}, "analysis": {}, "intelligence": {}}
+            foundation = FoundationDAO(db_path)
+            run_id = foundation.start_run(
+                run_type="auto_loop_cycle",
+                match_date=target_dates[1].isoformat(),
+                trigger_source="scheduler_rolling_collection",
+                summary={"stage": "start", "window": [target.isoformat() for target in target_dates]},
+            )
+
+            try:
+                summary["sporttery"] = {
+                    "skipped": True,
+                    "reason": "high-frequency loop keeps to lightweight status/result/intelligence work; full sporttery sync remains in daily/manual flow",
+                }
+
+                summary["status"] = _update_match_status(db_path)
+
+                if _collection_running("oddsfe_event_details", max_age_minutes=75):
+                    summary["oddsfe"] = {"skipped": True, "reason": "existing oddsfe_event_details run active"}
+                else:
+                    sync = OddsfeEventDetailSync(db_path)
+                    summaries = []
+                    for batch_index in range(2):
+                        result = sync.run(
+                            target_dates[0].isoformat(),
+                            target_dates[-1].isoformat(),
+                            apply=True,
+                            refresh=False,
+                            fetch_schedule=True,
+                            include_schedule_only=True,
+                            max_events=8,
+                            schedule_padding_days=1,
+                            cache_minutes=12,
+                            sleep_seconds=0.12,
+                            trigger_source="scheduler_rolling_collection",
+                        )
+                        result["batch_index"] = batch_index + 1
+                        summaries.append(result)
+                        if not result.get("candidates_deferred"):
+                            break
+                    summary["oddsfe"] = {"batches": summaries}
+
+                if _collection_running("oddsfe_ou_lines", max_age_minutes=45):
+                    summary["oddsfe_ou"] = {"skipped": True, "reason": "existing oddsfe_ou_lines run active"}
+                else:
+                    summary["oddsfe_ou"] = OddsfeOuLineSync(db_path).run(
+                        target_dates[0].isoformat(),
+                        target_dates[-1].isoformat(),
+                        apply=True,
+                        fetch_live=True,
+                        max_events=8,
+                        reanalyze=False,
+                        trigger_source="scheduler_rolling_collection",
+                    )
+
+                date_values = [target.isoformat() for target in target_dates]
+                summary["analysis"] = _run_lottery_analysis_for_dates(date_values, limit=12)
+
+                try:
+                    from backend.app.intelligence.service import IntelligenceService
+
+                    summary["finished_intelligence_backfill"] = IntelligenceService(db_path).backfill_finished(
+                        start_date=target_dates[0].isoformat(),
+                        end_date=target_dates[1].isoformat(),
+                        include_external=False,
+                        network=False,
+                        force=False,
+                        limit=30,
+                    )
+                except Exception as e:
+                    logger.warning("Rolling finished intelligence backfill failed: %s", e)
+                    summary["finished_intelligence_backfill"] = {"error": str(e)}
+
+                _run_intelligence(0, False, "scheduler_rolling_intelligence")
+                _run_intelligence(1, False, "scheduler_rolling_tomorrow_intelligence")
+                _run_intelligence(2, False, "scheduler_rolling_next2_intelligence")
+                summary["intelligence_gap_fill"] = _run_intelligence_gap_fill(
+                    -1,
+                    2,
+                    network=True,
+                    force=False,
+                    limit=6,
+                    trigger_source="scheduler_rolling_gap_fill",
+                )
+                summary["post_intelligence_analysis"] = _run_lottery_analysis_for_dates(date_values, limit=8)
+                summary["intelligence_review"] = _run_intelligence_reviews(-1, "spf", "scheduler_rolling_review")
+                try:
+                    from backend.app.lottery.services.auto_gap_runner import LotteryAutoGapRunner
+
+                    summary["auto_gap_fill"] = LotteryAutoGapRunner(db_path, ODDSFE_DB_PATH).run(
+                        date_from=date_values[0],
+                        date_to=date_values[-1],
+                        action_counts=None,
+                        max_events=8,
+                        max_analysis=8,
+                        max_intelligence=6,
+                        max_validation_dates=3,
+                        fetch_live_ou=True,
+                        network_intelligence=True,
+                        trigger_source="scheduler_rolling_auto_gap",
+                    )
+                except Exception as e:
+                    logger.warning("Rolling auto gap fill failed: %s", e)
+                    summary["auto_gap_fill"] = {"error": str(e)}
+                summary["foundation_backfill"] = _run_foundation_backfill(
+                    "scheduler_rolling_foundation",
+                    limit=500,
+                    include_mappings=False,
+                )
+                changed_this_cycle = (
+                    summary.get("analysis", {}).get("analyzed", 0) > 0
+                    or summary.get("post_intelligence_analysis", {}).get("analyzed", 0) > 0
+                    or any(
+                        int(value or 0) > 0
+                        for value in summary.get("auto_gap_fill", {}).get("action_counts", {}).values()
+                    )
+                    or _foundation_backfill_changed(summary.get("foundation_backfill", {}))
+                )
+                if changed_this_cycle:
+                    summary["snapshot_cleanup"] = _run_foundation_snapshot_cleanup(
+                        "scheduler_rolling_snapshot_cleanup"
+                    )
+                else:
+                    summary["snapshot_cleanup"] = {"skipped": True, "reason": "no refreshed analysis or foundation rows"}
+                if (
+                    changed_this_cycle
+                    or summary.get("snapshot_cleanup", {}).get("deleted_total", 0) > 0
+                ):
+                    summary["similar_cases"] = _run_similar_case_refresh("scheduler_rolling_similar_cases")
+                else:
+                    summary["similar_cases"] = {"skipped": True, "reason": "no refreshed analysis in this cycle"}
+                foundation.finish_run(run_id, status="success", summary=summary)
+                logger.info("Rolling collection completed: %s", summary)
+                return summary
+            except Exception as e:
+                foundation.finish_run(run_id, status="failed", summary=summary, error=str(e))
+                raise
+
+        return _run_locked("rolling_collection", "rolling_collection", _job)
+
+    def _run_historical_backfill():
+        """Backfill older dates in reverse order without blocking the current window."""
+        def _job():
+            from backend.app.data_access.foundation_dao import FoundationDAO
+            from backend.app.intelligence.service import IntelligenceService
+            from backend.app.lottery.services.oddsfe_event_sync import OddsfeEventDetailSync
+            from backend.app.lottery.services.oddsfe_ou_line_sync import OddsfeOuLineSync
+
+            target = _find_historical_backfill_date()
+            if not target:
+                logger.info("Historical backfill skipped: no incomplete historical date found")
+                return {"skipped": True}
+
+            target_date = target["d"]
+            summary = {"date": target_date, "target": target}
+            foundation = FoundationDAO(db_path)
+            run_id = foundation.start_run(
+                run_type="historical_backfill",
+                match_date=target_date,
+                trigger_source="scheduler_historical_backfill",
+                summary={"stage": "start", "target": target},
+            )
+            try:
+                if _collection_running("oddsfe_event_details", max_age_minutes=75):
+                    summary["oddsfe"] = {"skipped": True, "reason": "existing oddsfe_event_details run active"}
+                else:
+                    sync = OddsfeEventDetailSync(db_path)
+                    summary["oddsfe"] = sync.run(
+                        target_date,
+                        target_date,
+                        apply=True,
+                        refresh=False,
+                        fetch_schedule=True,
+                        include_schedule_only=False,
+                        max_events=8,
+                        schedule_padding_days=1,
+                        cache_minutes=1440,
+                        sleep_seconds=0.12,
+                        trigger_source="scheduler_historical_backfill",
+                    )
+
+                if _collection_running("oddsfe_ou_lines", max_age_minutes=45):
+                    summary["oddsfe_ou"] = {"skipped": True, "reason": "existing oddsfe_ou_lines run active"}
+                else:
+                    summary["oddsfe_ou"] = OddsfeOuLineSync(db_path).run(
+                        target_date,
+                        target_date,
+                        apply=True,
+                        fetch_live=True,
+                        max_events=8,
+                        reanalyze=False,
+                        trigger_source="scheduler_historical_backfill",
+                    )
+
+                summary["analysis"] = _run_lottery_analysis_for_dates([target_date], limit=10)
+                try:
+                    summary["intelligence_backfill"] = IntelligenceService(db_path).backfill_finished(
+                        start_date=target_date,
+                        end_date=target_date,
+                        include_external=False,
+                        network=False,
+                        force=False,
+                        limit=10,
+                    )
+                except Exception as e:
+                    summary["intelligence_backfill"] = {"error": str(e)}
+                summary["intelligence_gap_fill"] = _run_intelligence_gap_fill(
+                    start_date=target_date,
+                    end_date=target_date,
+                    network=False,
+                    force=False,
+                    limit=5,
+                    collectors=["team_news", "injuries_suspensions", "expected_lineup"],
+                    trigger_source="scheduler_historical_gap_fill",
+                )
+                summary["post_intelligence_analysis"] = _run_lottery_analysis_for_dates([target_date], limit=10)
+                summary["validation"] = _run_validation_for_date(target_date)
+                summary["queued_revalidation"] = _run_pending_revalidations(limit=10)
+                try:
+                    from backend.app.lottery.services.auto_gap_runner import LotteryAutoGapRunner
+
+                    summary["auto_gap_fill"] = LotteryAutoGapRunner(db_path, ODDSFE_DB_PATH).run(
+                        date_from=target_date,
+                        date_to=target_date,
+                        action_counts=None,
+                        max_events=8,
+                        max_analysis=10,
+                        max_intelligence=5,
+                        max_validation_dates=1,
+                        fetch_live_ou=True,
+                        network_intelligence=False,
+                        trigger_source="scheduler_historical_auto_gap",
+                    )
+                except Exception as e:
+                    logger.warning("Historical auto gap fill failed: %s", e)
+                    summary["auto_gap_fill"] = {"error": str(e)}
+                summary["foundation_backfill"] = _run_foundation_backfill(
+                    "scheduler_historical_foundation",
+                    limit=500,
+                    include_mappings=False,
+                )
+                if (
+                    summary.get("analysis", {}).get("analyzed", 0) > 0
+                    or summary.get("post_intelligence_analysis", {}).get("analyzed", 0) > 0
+                    or summary.get("validation", {}).get("validated", 0) > 0
+                    or summary.get("queued_revalidation", {}).get("processed", 0) > 0
+                    or any(
+                        int(value or 0) > 0
+                        for value in summary.get("auto_gap_fill", {}).get("action_counts", {}).values()
+                    )
+                    or _foundation_backfill_changed(summary.get("foundation_backfill", {}))
+                ):
+                    summary["similar_cases"] = _run_similar_case_refresh("scheduler_historical_similar_cases")
+                else:
+                    summary["similar_cases"] = {"skipped": True, "reason": "no new analysis or validation"}
+                foundation.finish_run(run_id, status="success", summary=summary)
+                logger.info("Historical backfill completed: %s", summary)
+                return summary
+            except Exception as e:
+                foundation.finish_run(run_id, status="failed", summary=summary, error=str(e))
+                raise
+
+        return _run_locked("historical_backfill", "historical_backfill", _job)
+
+    def _run_parallel_automation_center():
+        """Run the task-based automation center as the non-blocking coordinator."""
+        def _job():
+            from backend.app.lottery.services.automation_control import (
+                automation_center_kwargs_from_state,
+                get_automation_control_state,
+            )
+            from backend.app.lottery.services.automation_center import AutomationCenter
+
+            control = get_automation_control_state(db_path)
+            if not control.get("enabled"):
+                logger.info("automation_center skipped by control state: %s", control)
+                return {
+                    "success": True,
+                    "skipped": True,
+                    "reason": "automation_control_paused",
+                    "control": control,
+                }
+            kwargs = automation_center_kwargs_from_state(control, trigger_source="scheduler_automation_center")
+            center = AutomationCenter(db_path, ODDSFE_DB_PATH)
+            rescue = center.retry_recent_failed_task(
+                trigger_source="scheduler_automation_retry_rescue",
+                workers=1,
+                task_timeout_seconds=min(int(kwargs.get("task_timeout_seconds") or 300), 300),
+            )
+            result = center.run(**kwargs)
+            if isinstance(result, dict):
+                result["failure_rescue"] = rescue
+            return result
+
+            return AutomationCenter(db_path, ODDSFE_DB_PATH).run(
+                mode="mixed",
+                league="世界杯",
+                historical_dates=1,
+                historical_lookback_days=180,
+                include_learning=True,
+                workers=3,
+                task_timeout_seconds=300,
+                max_events=6,
+                max_analysis=10,
+                max_intelligence=6,
+                max_validation_dates=1,
+                national_ou_gate=True,
+                fetch_live_ou=True,
+                network_intelligence=True,
+                trigger_source="scheduler_automation_center",
+            )
+
+        return _run_locked("automation_center", "automation_center", _job)
 
     _scheduler = BackgroundScheduler()
 
@@ -1241,8 +2298,111 @@ def _start_daily_scheduler():
         replace_existing=True
     )
 
+    # 2:35 将竞彩验证结果同步成比赛情报复盘归因
+    _scheduler.add_job(
+        lambda: _run_intelligence_reviews(-1, 'spf', 'scheduler_intelligence_review'),
+        CronTrigger(hour=2, minute=35),
+        id='intelligence_review',
+        name='赛后情报复盘归因',
+        replace_existing=True
+    )
+
+    # 2:50 学习底座补漏 + 相似历史案例重建
+    _scheduler.add_job(
+        lambda: _run_learning_refresh('scheduler_nightly_learning_refresh', limit=0),
+        CronTrigger(hour=2, minute=50),
+        id='learning_refresh',
+        name='学习底座补漏与相似案例重建',
+        replace_existing=True
+    )
+
+    # 7:10 生成今日比赛情报包，并采集本地数据 + 天气/新闻
+    _scheduler.add_job(
+        lambda: _run_intelligence(0, True, 'scheduler_morning_intelligence'),
+        CronTrigger(hour=7, minute=10),
+        id='intelligence_morning',
+        name='今日比赛情报生成',
+        replace_existing=True
+    )
+
+    # 12:20/18:20/22:20 刷新今日天气和新闻
+    _scheduler.add_job(
+        lambda: _run_intelligence(0, True, 'scheduler_refresh_intelligence'),
+        CronTrigger(hour='12,18,22', minute=20),
+        id='intelligence_refresh',
+        name='今日情报滚动刷新',
+        replace_existing=True
+    )
+
+    # 24小时小批量缺口补齐：伤停、新闻、预计阵容、天气，以及可重算的内置证据
+    _scheduler.add_job(
+        lambda: _run_intelligence_gap_fill(
+            -1,
+            2,
+            network=True,
+            force=False,
+            limit=8,
+            trigger_source='scheduler_intelligence_gap_fill',
+        ),
+        IntervalTrigger(minutes=45),
+        id='intelligence_gap_fill',
+        name='情报缺口优先级补齐',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+        next_run_time=datetime.now() + timedelta(minutes=6),
+    )
+
+    # 23:30 预生成明天比赛的本地情报包，外部天气新闻次日再刷新
+    _scheduler.add_job(
+        lambda: _run_intelligence(1, False, 'scheduler_tomorrow_prefetch'),
+        CronTrigger(hour=23, minute=30),
+        id='intelligence_tomorrow_prefetch',
+        name='明日比赛情报预生成',
+        replace_existing=True
+    )
+
+    # 24小时滚动采集：今天/明天/昨天的小批量赛程、赔率、赛果、分析、情报刷新
+    _scheduler.add_job(
+        _run_rolling_collection,
+        IntervalTrigger(minutes=15),
+        id='rolling_collection',
+        name='24小时当前窗口滚动采集',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+        next_run_time=datetime.now() + timedelta(seconds=30),
+    )
+
+    # 历史倒序补齐：每次只处理一个日期，避免长时间大批量采集卡住服务
+    _scheduler.add_job(
+        _run_historical_backfill,
+        IntervalTrigger(minutes=60),
+        id='historical_backfill',
+        name='历史比赛倒序补齐',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=600,
+        next_run_time=datetime.now() + timedelta(minutes=3),
+    )
+
+    _scheduler.add_job(
+        _run_parallel_automation_center,
+        IntervalTrigger(minutes=30),
+        id='automation_center',
+        name='并发任务中控',
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300,
+        next_run_time=datetime.now() + timedelta(minutes=2),
+    )
+
     _scheduler.start()
-    logger.info('Daily cycle scheduler started (6:05 morning, 14:05 clv, 2:05 validate)')
+    logger.info('Daily scheduler started with cycle, intelligence, rolling collection and backfill jobs')
 
 
 @app.on_event("startup")
@@ -1254,15 +2414,154 @@ async def _on_startup():
 async def _on_shutdown():
     global _scheduler
     if _scheduler:
-        _scheduler.shutdown()
+        _scheduler.shutdown(wait=False)
         logger.info('Daily cycle scheduler stopped')
+
+
+def _systemd_show(unit_name: str) -> dict:
+    """Return systemd unit properties when running on Linux."""
+    if os.name == "nt":
+        return {}
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", unit_name],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception:
+        return {}
+    if result.returncode != 0:
+        return {}
+    values = {}
+    for line in (result.stdout or "").splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        values[key] = value
+    return values
+
+
+def _systemd_timer_next_run(unit_name: str) -> str | None:
+    if os.name == "nt":
+        return None
+    try:
+        result = subprocess.run(
+            ["systemctl", "list-timers", "--all", unit_name, "--no-legend", "--no-pager"],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    line = (result.stdout or "").strip().splitlines()
+    if not line:
+        return None
+    parts = line[0].split()
+    if not parts or parts[0] == "-":
+        return None
+    return " ".join(parts[:4]) if len(parts) >= 4 else parts[0]
+
+
+def _external_systemd_timer_status(timer_unit: str, service_unit: str, name: str) -> dict | None:
+    """Expose an external systemd timer to the frontend scheduler panel."""
+    timer = _systemd_show(timer_unit)
+    if not timer:
+        return None
+    service = _systemd_show(service_unit)
+    active = timer.get("ActiveState") == "active"
+    service_active = service.get("ActiveState") in {"active", "activating"}
+    next_run = timer.get("NextElapseUSecRealtime") or _systemd_timer_next_run(timer_unit)
+    return {
+        "id": timer_unit,
+        "name": name,
+        "running": active,
+        "active": active,
+        "service_active": service_active,
+        "state": timer.get("ActiveState") or "unknown",
+        "sub_state": timer.get("SubState") or "",
+        "next_run": next_run,
+        "last_trigger": timer.get("LastTriggerUSec") or None,
+        "service_state": service.get("ActiveState") or "",
+        "service_sub_state": service.get("SubState") or "",
+        "service_result": service.get("Result") or "",
+        "exec_main_status": service.get("ExecMainStatus") or "",
+    }
+
+
+def _external_automation_timer_status() -> dict | None:
+    return _external_systemd_timer_status(
+        "football-automation-tick.timer",
+        "football-automation-tick.service",
+        "分段自动化中控",
+    )
+
+
+def _external_learning_timer_status() -> dict | None:
+    return _external_systemd_timer_status(
+        "football-learning-refresh.timer",
+        "football-learning-refresh.service",
+        "夜间重学习",
+    )
 
 
 @app.get("/api/scheduler/status")
 async def scheduler_status():
     """查看日循环调度状态"""
     if not _scheduler:
-        return {"running": False}
+        external_timer = _external_automation_timer_status()
+        learning_timer = _external_learning_timer_status()
+        external_timers = [item for item in (external_timer, learning_timer) if item]
+        if external_timer and external_timer.get("active"):
+            jobs = [
+                {
+                    "id": "automation_center",
+                    "name": external_timer.get("name") or "分段自动化中控",
+                    "next_run": external_timer.get("next_run"),
+                },
+                {
+                    "id": "external_automation_tick",
+                    "name": external_timer.get("name") or "分段自动化中控",
+                    "next_run": external_timer.get("next_run"),
+                },
+            ]
+            if learning_timer:
+                jobs.append(
+                    {
+                        "id": "learning_refresh",
+                        "name": learning_timer.get("name") or "夜间重学习",
+                        "next_run": learning_timer.get("next_run"),
+                    }
+                )
+            return {
+                "running": True,
+                "active": True,
+                "paused": False,
+                "state": "external_timer",
+                "state_label": "分段自动化中",
+                "jobs": jobs,
+                "auto_loop": {"collection_runs": [], "intelligence_runs": [], "revalidation_pending": 0},
+                "external_automation": external_timer,
+                "external_learning": learning_timer,
+                "external_timers": external_timers,
+            }
+        return {
+            "running": False,
+            "active": False,
+            "paused": False,
+            "state": "stopped",
+            "state_label": "未运行",
+            "external_automation": external_timer,
+            "external_learning": learning_timer,
+            "external_timers": external_timers,
+        }
+    state_code = getattr(_scheduler, "state", None)
+    paused = state_code == 2
+    active = not paused
     jobs = []
     for job in _scheduler.get_jobs():
         jobs.append({
@@ -1270,7 +2569,454 @@ async def scheduler_status():
             "name": job.name,
             "next_run": str(job.next_run_time) if job.next_run_time else None,
         })
-    return {"running": True, "jobs": jobs}
+
+    auto_loop = {"collection_runs": [], "intelligence_runs": [], "revalidation_pending": 0}
+    try:
+        conn = sqlite3.connect(DATABASE_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+
+        def _has_table(table_name: str) -> bool:
+            return conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+                (table_name,),
+            ).fetchone() is not None
+
+        def _loads_summary(value):
+            if not value:
+                return {}
+            try:
+                return json.loads(value)
+            except Exception:
+                return {"raw": value}
+
+        def _pick_summary_fields(value, keys):
+            if not isinstance(value, dict):
+                return {}
+            return {key: value.get(key) for key in keys if key in value}
+
+        def _compact_gap_steps(steps):
+            if not isinstance(steps, dict):
+                return {}
+            step_keys = {
+                "event_details": [
+                    "event_api_fetched", "lottery_results_inserted", "lottery_results_updated",
+                    "revalidation_queued", "candidates", "candidates_deferred", "skipped", "reason", "error",
+                ],
+                "ou_lines": [
+                    "updated", "candidates", "from_oddsfe_merged", "live_fetched",
+                    "skipped", "reason", "error",
+                ],
+                "analysis": ["analyzed", "candidates", "planned_candidates", "skipped", "reason", "error"],
+                "intelligence": ["processed", "planned_candidates", "skipped", "reason", "error"],
+                "validation": ["validated", "correct", "accuracy", "skipped", "reason", "error"],
+                "learning": ["reviews", "snapshots", "skipped", "reason", "error"],
+            }
+            compact = {}
+            for key, fields in step_keys.items():
+                if key in steps:
+                    compact[key] = _pick_summary_fields(steps.get(key), fields)
+            return compact
+
+        def _compact_oddsfe_summary(value):
+            fields = [
+                "event_api_fetched", "event_cache_used", "lottery_rows_seen",
+                "lottery_results_inserted", "lottery_results_updated", "lottery_results_unchanged",
+                "revalidation_queued", "candidates", "candidates_deferred", "remaining_uncached_events",
+                "skipped", "reason", "error",
+            ]
+            if isinstance(value, dict) and isinstance(value.get("batches"), list):
+                return {"batches": [_pick_summary_fields(item, fields) for item in value.get("batches", [])[:2]]}
+            return _pick_summary_fields(value, fields)
+
+        def _compact_intelligence_gap(value):
+            fields = ["processed", "planned_candidates", "candidates", "updated", "skipped", "reason", "error"]
+            if isinstance(value, dict) and isinstance(value.get("summary"), dict):
+                return {"summary": _pick_summary_fields(value.get("summary"), fields)}
+            return _pick_summary_fields(value, fields)
+
+        def _compact_intelligence_run_summary(summary):
+            if not isinstance(summary, dict):
+                return {}
+            compact = _pick_summary_fields(summary, ["processed", "planned_candidates", "failed", "skipped", "error"])
+            generated = summary.get("generated")
+            if isinstance(generated, dict):
+                compact["generated"] = _pick_summary_fields(generated, ["created", "updated", "skipped"])
+                jobs = generated.get("jobs")
+                if isinstance(jobs, list):
+                    compact["generated"]["jobs_count"] = len(jobs)
+            results = summary.get("results")
+            if isinstance(results, list):
+                compact["results_count"] = len(results)
+                compact["results"] = [
+                    _pick_summary_fields(
+                        item,
+                        [
+                            "job_id", "match", "coverage", "completeness", "strict_coverage",
+                            "average_confidence", "required_missing", "status",
+                        ],
+                    )
+                    for item in results[:8]
+                    if isinstance(item, dict)
+                ]
+            return compact
+
+        def _compact_automation_payload(payload):
+            if not isinstance(payload, dict):
+                return {}
+            compact = _pick_summary_fields(
+                payload,
+                [
+                    "task", "success", "candidates", "event_api_fetched", "lottery_results_inserted",
+                    "lottery_results_updated", "updated", "from_oddsfe_merged", "live_fetched",
+                    "processed", "analyzed", "validated", "correct", "accuracy", "failed",
+                    "changes", "changed_reports", "prediction_rows", "delta_correct", "full_delta_correct",
+                    "by_reason", "improved", "regressed", "metadata_only", "accepted", "fact_table",
+                    "saved", "saved_profiles", "saved_audits", "targets", "eligible", "scored_matches",
+                    "saved_patterns", "changed_candidates", "current_correct", "current_accuracy",
+                    "profile_correct", "changed_improved", "changed_regressed", "half_axis_errors",
+                    "full_axis_errors", "path_flips", "matches", "plays", "wrong",
+                    "validation_consistency_ok", "prediction_consistency_ok", "hard_prediction_issues",
+                    "prediction_parse_errors", "post_prediction_consistency_ok", "post_prediction_hard_issues",
+                    "post_prediction_parse_errors", "skipped", "reason", "error",
+                ],
+            )
+            for key in ("prediction_consistency", "post_prediction_consistency", "prediction_consistency_initial", "post_prediction_consistency_initial"):
+                value = payload.get(key)
+                if isinstance(value, dict):
+                    compact[key] = _pick_summary_fields(
+                        value,
+                        [
+                            "date_from", "date_to", "league", "reports_checked",
+                            "consistency_adjusted_reports", "hard_issues", "parse_errors",
+                            "issue_counts", "stale_filter_supported",
+                        ],
+                    )
+            for key in ("prediction_remediation", "post_prediction_remediation"):
+                value = payload.get(key)
+                if isinstance(value, dict):
+                    compact[key] = _pick_summary_fields(
+                        value,
+                        [
+                            "attempted", "reason", "issue_matches", "limited", "targets",
+                            "analyzed", "failed", "analyzed_ids", "failed_examples",
+                        ],
+                    )
+            dry_run = payload.get("dry_run") if isinstance(payload.get("dry_run"), dict) else None
+            if dry_run:
+                compact["dry_run"] = _pick_summary_fields(
+                    dry_run,
+                    ["changes", "improved", "regressed", "delta_correct", "full_delta_correct"],
+                )
+            for key in ("top_error_categories", "top_categories", "top_tags", "collection_actions", "model_actions", "drivers", "risk_tags"):
+                if isinstance(payload.get(key), list):
+                    compact[key] = payload.get(key)[:5]
+            return compact
+
+        def _compact_automation_task_item(item):
+            if not isinstance(item, dict):
+                return {}
+            task = item.get("task") if isinstance(item.get("task"), dict) else {}
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            return {
+                **_pick_summary_fields(item, [
+                    "success", "skipped", "reason", "exit_code", "elapsed_seconds",
+                    "timeout", "error", "source_run_id", "source_task_key", "source_task_index",
+                ]),
+                "task": _pick_summary_fields(task, ["kind", "date_from", "date_to", "wave", "reason"]),
+                "payload": _compact_automation_payload(payload),
+            }
+
+        def _compact_run_summary(run_type, summary):
+            if not isinstance(summary, dict):
+                return {}
+
+            compact = _pick_summary_fields(
+                summary,
+                ["date", "date_from", "date_to", "start_date", "end_date", "match_date", "target", "action_counts", "action_source"],
+            )
+            if isinstance(summary.get("range"), dict):
+                compact["range"] = _pick_summary_fields(summary.get("range"), ["start_date", "end_date"])
+
+            if run_type == "auto_gap_fill":
+                compact["steps"] = _compact_gap_steps(summary.get("steps"))
+                return compact
+
+            if run_type == "automation_center":
+                compact.update(_pick_summary_fields(
+                    summary,
+                    [
+                        "mode", "league", "dates", "task_count", "by_wave", "by_kind",
+                        "workers", "failed_tasks", "skipped", "reason", "error", "stage", "progress",
+                        "failure_rescue",
+                    ],
+                ))
+                waves = summary.get("waves")
+                if isinstance(waves, list):
+                    compact["waves"] = [
+                        _pick_summary_fields(item, ["wave", "task_count", "failed", "elapsed_seconds"])
+                        for item in waves[:8]
+                        if isinstance(item, dict)
+                    ]
+                tasks = summary.get("tasks")
+                if isinstance(tasks, list):
+                    compact["tasks"] = [
+                        _compact_automation_task_item(item)
+                        for item in tasks[:32]
+                        if isinstance(item, dict)
+                    ]
+                gate = summary.get("model_gate")
+                if isinstance(gate, dict):
+                    comparison = gate.get("comparison") if isinstance(gate.get("comparison"), dict) else {}
+                    consistency = gate.get("consistency") if isinstance(gate.get("consistency"), dict) else {}
+                    detail = gate.get("decision_detail") if isinstance(gate.get("decision_detail"), dict) else {}
+                    rollback = summary.get("model_gate_rollback") if isinstance(summary.get("model_gate_rollback"), dict) else {}
+                    compact["model_gate"] = {
+                        "decision": gate.get("decision"),
+                        "success": gate.get("success"),
+                        "overall_delta_pp": comparison.get("overall_delta_pp"),
+                        "hard_issues": consistency.get("hard_issues"),
+                        "reasons": (detail.get("reasons") or [])[:3],
+                        "warnings": (detail.get("warnings") or [])[:3],
+                        "rollback_success": rollback.get("success") if rollback else None,
+                        "rollback_failed": bool(summary.get("model_gate_rollback_failed")),
+                    }
+                return compact
+
+            if run_type == "automation_retry":
+                compact.update(_pick_summary_fields(
+                    summary,
+                    ["source_run_id", "task_count", "workers", "failed_tasks", "success", "stage", "progress", "error"],
+                ))
+                tasks = summary.get("tasks")
+                if isinstance(tasks, list):
+                    compact["tasks"] = [
+                        _compact_automation_task_item(item)
+                        for item in tasks[:32]
+                        if isinstance(item, dict)
+                    ]
+                return compact
+
+            if str(run_type or "").startswith("automation_"):
+                task = summary.get("task") if isinstance(summary.get("task"), dict) else {}
+                payload = summary.get("payload") if isinstance(summary.get("payload"), dict) else {}
+                compact["task"] = _pick_summary_fields(task, ["kind", "date_from", "date_to", "wave", "reason"])
+                compact.update(_pick_summary_fields(summary, ["success", "exit_code", "elapsed_seconds", "timeout", "error"]))
+                compact["payload"] = _compact_automation_payload(payload)
+                return compact
+
+            if run_type in {"auto_loop_cycle", "historical_backfill"}:
+                compact["oddsfe"] = _compact_oddsfe_summary(summary.get("oddsfe"))
+                compact["oddsfe_ou"] = _pick_summary_fields(
+                    summary.get("oddsfe_ou"),
+                    [
+                        "updated", "candidates", "from_oddsfe_merged", "live_fetched",
+                        "skipped", "reason", "error",
+                    ],
+                )
+                compact["analysis"] = _pick_summary_fields(
+                    summary.get("analysis"),
+                    ["analyzed", "candidates", "planned_candidates", "skipped", "reason", "error"],
+                )
+                compact["finished_intelligence_backfill"] = _compact_intelligence_gap(
+                    summary.get("finished_intelligence_backfill")
+                )
+                compact["intelligence_gap_fill"] = _compact_intelligence_gap(summary.get("intelligence_gap_fill"))
+                compact["post_intelligence_analysis"] = _pick_summary_fields(
+                    summary.get("post_intelligence_analysis"),
+                    ["analyzed", "candidates", "planned_candidates", "skipped", "reason", "error"],
+                )
+                compact["validation"] = _pick_summary_fields(
+                    summary.get("validation"),
+                    ["validated", "correct", "accuracy", "skipped", "reason", "error"],
+                )
+                compact["queued_revalidation"] = _pick_summary_fields(
+                    summary.get("queued_revalidation"), ["processed", "queued", "skipped", "reason", "error"]
+                )
+                compact["similar_cases"] = _pick_summary_fields(
+                    summary.get("similar_cases"),
+                    ["cases_written", "targets_with_cases", "skipped", "reason", "error"],
+                )
+                return compact
+
+            return {
+                **compact,
+                **_pick_summary_fields(
+                    summary,
+                    [
+                        "event_api_fetched", "lottery_results_inserted", "lottery_results_updated",
+                        "updated", "candidates", "reanalyzed", "from_oddsfe_merged", "live_fetched",
+                        "validated", "accuracy", "skipped", "reason", "error",
+                    ],
+                ),
+            }
+
+        def _parse_run_dt(value):
+            if not value:
+                return None
+            text = str(value).replace("T", " ")[:19]
+            try:
+                return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return None
+
+        def _compact_run_row(row):
+            item = dict(row)
+            summary = _loads_summary(item.pop("summary_json", None))
+            item["summary"] = _compact_run_summary(item.get("run_type"), summary)
+            if item.get("status") == "running":
+                started = _parse_run_dt(item.get("started_at"))
+                if started:
+                    age_seconds = max(0, int((datetime.utcnow() - started).total_seconds()))
+                    stale_thresholds = {
+                        "auto_loop_cycle": 90 * 60,
+                        "historical_backfill": 90 * 60,
+                        "auto_gap_fill": 45 * 60,
+                        "automation_center": 60 * 60,
+                        "automation_event_details": 30 * 60,
+                        "automation_ou_lines": 30 * 60,
+                        "automation_intelligence": 30 * 60,
+                        "automation_analysis": 30 * 60,
+                        "automation_play_consistency_gate": 30 * 60,
+                        "automation_bqc_full_axis_gate": 30 * 60,
+                        "automation_handicap_margin_gate": 30 * 60,
+                        "automation_validation": 30 * 60,
+                        "automation_national_ou_gate": 30 * 60,
+                        "automation_bqc_half_time_profile": 30 * 60,
+                        "automation_bqc_full_time_axis": 30 * 60,
+                        "automation_handicap_margin_axis": 30 * 60,
+                        "automation_prediction_error_review": 30 * 60,
+                        "automation_learning": 45 * 60,
+                        "automation_retry": 45 * 60,
+                        "oddsfe_event_details": 75 * 60,
+                        "oddsfe_ou_lines": 45 * 60,
+                        "learning_refresh": 45 * 60,
+                    }
+                    item["age_seconds"] = age_seconds
+                    item["is_stale"] = age_seconds >= stale_thresholds.get(item.get("run_type"), 60 * 60)
+            return item
+
+        def _compact_intelligence_run_row(row):
+            item = dict(row)
+            summary = _loads_summary(item.pop("summary_json", None))
+            item["summary"] = _compact_intelligence_run_summary(summary)
+            if item.get("status") == "running":
+                started = _parse_run_dt(item.get("started_at"))
+                if started:
+                    age_seconds = max(0, int((datetime.utcnow() - started).total_seconds()))
+                    item["age_seconds"] = age_seconds
+                    item["is_stale"] = age_seconds >= 45 * 60
+            return item
+
+        if _has_table("collection_runs"):
+            rows = conn.execute(
+                """
+                SELECT run_id, trigger_source, run_type, match_date, status,
+                       started_at, finished_at, summary_json, error
+                FROM collection_runs
+                WHERE run_type IN (
+                    'auto_loop_cycle', 'historical_backfill', 'auto_gap_fill',
+                    'automation_center', 'automation_event_details', 'automation_ou_lines',
+                    'automation_intelligence', 'automation_analysis', 'automation_play_consistency_gate', 'automation_bqc_full_axis_gate', 'automation_handicap_margin_gate', 'automation_validation',
+                    'automation_national_ou_gate', 'automation_bqc_half_time_profile', 'automation_bqc_full_time_axis', 'automation_handicap_margin_axis', 'automation_prediction_error_review',
+                    'automation_learning', 'automation_retry',
+                    'oddsfe_event_details', 'oddsfe_ou_lines', 'learning_refresh'
+                )
+                ORDER BY started_at DESC
+                LIMIT 80
+                """
+            ).fetchall()
+            auto_loop["collection_runs"] = [_compact_run_row(row) for row in rows]
+
+        if _has_table("intelligence_runs"):
+            rows = conn.execute(
+                """
+                SELECT run_id, run_date, trigger_source, status, started_at,
+                       finished_at, summary_json, error
+                FROM intelligence_runs
+                ORDER BY started_at DESC
+                LIMIT 8
+                """
+            ).fetchall()
+            auto_loop["intelligence_runs"] = [_compact_intelligence_run_row(row) for row in rows]
+
+        if _has_table("lottery_revalidation_queue"):
+            row = conn.execute(
+                "SELECT COUNT(*) FROM lottery_revalidation_queue WHERE status = 'pending'"
+            ).fetchone()
+            auto_loop["revalidation_pending"] = int(row[0] or 0)
+
+        conn.close()
+    except Exception as e:
+        auto_loop["error"] = str(e)
+
+    try:
+        from backend.app.lottery.services.automation_control import get_automation_control_state
+
+        automation_control = get_automation_control_state(DATABASE_PATH)
+    except Exception as e:
+        automation_control = {"enabled": False, "state": "unknown", "error": str(e)}
+
+    return {
+        "running": True,
+        "active": active,
+        "paused": paused,
+        "state": "paused" if paused else "active",
+        "state_label": "已暂停" if paused else "自动中",
+        "jobs": jobs,
+        "auto_loop": auto_loop,
+        "automation_control": automation_control,
+    }
+
+
+@app.post("/api/scheduler/pause")
+async def scheduler_pause():
+    """Pause automatic scheduled jobs without stopping the API service."""
+    if not _scheduler:
+        raise HTTPException(status_code=503, detail="scheduler is not running")
+    _scheduler.pause()
+    return {"success": True, "state": "paused", "state_label": "已暂停"}
+
+
+@app.post("/api/scheduler/resume")
+async def scheduler_resume():
+    """Resume automatic scheduled jobs."""
+    if not _scheduler:
+        raise HTTPException(status_code=503, detail="scheduler is not running")
+    _scheduler.resume()
+    return {"success": True, "state": "active", "state_label": "自动中"}
+
+
+@app.post("/api/scheduler/run/{job_id}")
+async def scheduler_run_now(job_id: str):
+    """立即触发一个调度任务，不阻塞等待任务完成。"""
+    if not _scheduler:
+        raise HTTPException(status_code=503, detail="scheduler is not running")
+    allowed = {
+        "morning_cycle",
+        "clv_cycle",
+        "validate_cycle",
+        "intelligence_review",
+        "learning_refresh",
+        "intelligence_morning",
+        "intelligence_refresh",
+        "intelligence_gap_fill",
+        "intelligence_tomorrow_prefetch",
+        "rolling_collection",
+        "historical_backfill",
+        "automation_center",
+    }
+    if job_id not in allowed:
+        raise HTTPException(status_code=400, detail=f"unsupported scheduler job: {job_id}")
+    job = _scheduler.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"scheduler job not found: {job_id}")
+    job.modify(next_run_time=datetime.now())
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": "scheduled_now",
+        "next_run": str(job.next_run_time) if job.next_run_time else None,
+    }
 
 
 @app.get("/api/health")

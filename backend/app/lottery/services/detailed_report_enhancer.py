@@ -119,7 +119,8 @@ class DetailedReportEnhancer:
                     team_result = '平'
 
                 opponent_name_en = row['away_team_name'] if is_home else row['home_team_name']
-                opponent_name_cn = row.get('away_team_cn') if is_home else row.get('home_team_cn')
+                cn_key = 'away_team_cn' if is_home else 'home_team_cn'
+                opponent_name_cn = row[cn_key] if cn_key in row.keys() else None
                 opponent_name = opponent_name_cn or opponent_name_en
 
                 matches.append({
@@ -226,8 +227,8 @@ class DetailedReportEnhancer:
 
             matches.append({
                 'match_date': row['match_date'],
-                'home_team': row.get('home_team_cn') or row['home_team_name'],
-                'away_team': row.get('away_team_cn') or row['away_team_name'],
+                'home_team': row['home_team_cn'] if 'home_team_cn' in row.keys() else row['home_team_name'],
+                'away_team': row['away_team_cn'] if 'away_team_cn' in row.keys() else row['away_team_name'],
                 'score': f"{row['home_goals']}-{row['away_goals']}",
                 'result': result
             })
@@ -370,7 +371,7 @@ class DetailedReportEnhancer:
                 'goal_diff': row['goal_diff'],
                 'points': row['points'],
                 'form': row['form'],
-                'league_name': row.get('league_name_cn') or row['league_name'],
+                'league_name': row['league_name_cn'] if 'league_name_cn' in row.keys() else row['league_name'],
                 'home_record': {
                     'played': row['home_played'],
                     'won': row['home_won'],

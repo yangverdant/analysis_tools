@@ -345,6 +345,35 @@ class OddsfeSync:
             if fixed:
                 logger.info(f"  Fixed status '{old}' → '{new}': {fixed} rows")
 
+        # 创建oddsfe_matches快速查找表（Pinnacle O/U + 1X2赔率）
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS oddsfe_matches (
+                event_id TEXT PRIMARY KEY,
+                event_start_at TEXT,
+                team_home_name TEXT,
+                team_away_name TEXT,
+                category_name TEXT,
+                tournament_name TEXT,
+                ou_pinnacle_line REAL,
+                ou_pinnacle_over REAL,
+                ou_pinnacle_under REAL,
+                ou_pinnacle_updated_at TEXT,
+                spf_pinnacle_home REAL,
+                spf_pinnacle_draw REAL,
+                spf_pinnacle_away REAL,
+                UNIQUE(event_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ou_teams ON oddsfe_matches(team_home_name, team_away_name);
+            CREATE INDEX IF NOT EXISTS idx_ou_updated ON oddsfe_matches(ou_pinnacle_updated_at);
+        """)
+
+        # 添加analysis缓存失效列
+        try:
+            conn.execute("ALTER TABLE lottery_analysis_reports ADD COLUMN is_stale INTEGER DEFAULT 0")
+            logger.info("  Added lottery_analysis_reports.is_stale")
+        except sqlite3.OperationalError:
+            pass
+
         conn.commit()
         conn.close()
         logger.info("  Schema migration done")

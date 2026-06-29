@@ -59,6 +59,35 @@ def get_db():
     conn.row_factory = sqlite3.Row
     return conn
 
+def get_whitelist_league_ids(conn):
+    """获取白名单联赛ID列表，空列表表示显示全部"""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT item_id FROM user_favorites WHERE item_type = 'league'")
+        return [int(row[0]) for row in cursor.fetchall()]
+    except Exception:
+        return []
+
+def apply_whitelist_filter(query, params, conn, league_column='l.league_id'):
+    """如果用户设置了联赛白名单，追加过滤条件"""
+    fav_ids = get_whitelist_league_ids(conn)
+    if fav_ids:
+        placeholders = ','.join(['?'] * len(fav_ids))
+        query += f" AND {league_column} IN ({placeholders})"
+        params.extend(fav_ids)
+    return query, params
+
+def filter_dirty_matches(matches):
+    """应用层过滤：移除占位符/测试球队"""
+    invalid_keywords = ['W95', 'W100', 'W101', 'W50', '待定球队', '待定']
+    return [m for m in matches
+            if not any(kw in (m.get('home_team', '') or '') for kw in invalid_keywords)
+            and not any(kw in (m.get('away_team', '') or '') for kw in invalid_keywords)
+            and not (m.get('home_team', '') or '').startswith('W')
+            and not (m.get('away_team', '') or '').startswith('W')
+            and not (m.get('home_team', '') or '').startswith('Team ')
+            and not (m.get('away_team', '') or '').startswith('Team ')]
+
 def get_timezone_offset(country):
     if not country:
         return -8  # 国际赛事无国家信息时假设UTC
@@ -128,7 +157,7 @@ async def get_today_matches():
     bj_yesterday = (now_bj - _td(days=1)).strftime('%Y-%m-%d')
     bj_tomorrow = (now_bj + _td(days=1)).strftime('%Y-%m-%d')
 
-    cursor.execute("""
+    query = """
         SELECT m.match_id, m.match_date, m.match_time, m.time_type,
                l.name_en as league, l.name_cn as league_cn, l.country as league_country, l.league_id,
                m.home_team_id, m.away_team_id,
@@ -140,8 +169,19 @@ async def get_today_matches():
         JOIN teams at ON m.away_team_id = at.team_id
         JOIN leagues l ON m.league_id = l.league_id
         WHERE m.match_date IN (?, ?, ?)
-        ORDER BY m.match_date, m.match_time
-    """, (bj_yesterday, bj_today, bj_tomorrow))
+          AND ht.name_en NOT LIKE 'W%'
+          AND at.name_en NOT LIKE 'W%'
+          AND ht.name_en NOT LIKE '待定%'
+          AND at.name_en NOT LIKE '待定%'
+          AND ht.name_en NOT LIKE 'Team %'
+          AND at.name_en NOT LIKE 'Team %'
+          AND ht.name_en NOT LIKE 'Team %'
+          AND at.name_en NOT LIKE 'Team %'
+    """
+    params = [bj_yesterday, bj_today, bj_tomorrow]
+    query, params = apply_whitelist_filter(query, params, conn)
+    query += " ORDER BY m.match_date, m.match_time"
+    cursor.execute(query, params)
     all_matches = [dict(row) for row in cursor.fetchall()]
 
     # 转北京时间后过滤: 今天全天 + 明天12:00之前(凌晨/早场比赛算"今日")
@@ -169,16 +209,41 @@ async def get_today_matches():
             match['time_type'] = time_type
             matches.append(match)
 
+    # 先解析中文名(去重需要用CN名作为key)
+    for match in matches:
+        match['home_team_cn'] = match.get('home_team_cn') or get_chinese_team_name(match['home_team'])
+        match['away_team_cn'] = match.get('away_team_cn') or get_chinese_team_name(match['away_team'])
+        match['league_cn'] = match.get('league_cn') or get_chinese_league_name(match['league'])
+        match['league_country_cn'] = get_chinese_country_name(match['league_country'])
+
+    # 去重: 同一天同一对球队可能来自不同数据源(如世界杯 vs World Championship)
+    # 使用CN名去重(因为"Bosnia and Herzegovina"和"Bosnia & Herzegovina"映射到同一个"波黑")
+    # 优先保留较低league_id(主数据源)
+    seen = {}
+    deduped = []
+    for match in matches:
+        home_cn = match.get('home_team_cn', match.get('home_team', ''))
+        away_cn = match.get('away_team_cn', match.get('away_team', ''))
+        date = match.get('beijing_date', match['match_date'])
+        key = (home_cn, away_cn, date)
+        if key in seen:
+            prev_idx = seen[key]
+            prev = deduped[prev_idx]
+            # 优先: 较低league_id(主数据源)
+            if match.get('league_id', 99999) < prev.get('league_id', 99999):
+                deduped[prev_idx] = match
+        else:
+            seen[key] = len(deduped)
+            deduped.append(match)
+    matches = deduped
+
     # 导入Elo分析器获取简要预测
     from ..analytics.elo import EloAnalyzer
     db_path = os.path.join(os.path.dirname(__file__), '..', '..', 'data', 'football_v2.db')
     elo_analyzer = EloAnalyzer(db_path)
 
     for match in matches:
-        match['home_team_cn'] = match.get('home_team_cn') or get_chinese_team_name(match['home_team'])
-        match['away_team_cn'] = match.get('away_team_cn') or get_chinese_team_name(match['away_team'])
-        match['league_cn'] = match.get('league_cn') or get_chinese_league_name(match['league'])
-        match['league_country_cn'] = get_chinese_country_name(match['league_country'])
+        # CN names already resolved above in dedup phase
 
         # 添加简要分析（Elo + 简单预测）
         try:
@@ -217,11 +282,12 @@ async def get_today_matches():
 
 @router.get("/date-range")
 async def get_matches_by_date_range(from_date: str = Query(...), to_date: str = Query(...)):
-    """获取日期范围内的比赛"""
+    """获取日期范围内的比赛（支持联赛白名单过滤）"""
     conn = get_db()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    # 构建SQL
+    base_query = """
         SELECT m.match_id, m.match_date, m.match_time, m.time_type,
                m.home_team_id, m.away_team_id,
                l.name_en as league, l.name_cn as league_cn, l.country as league_country, l.league_id,
@@ -233,10 +299,26 @@ async def get_matches_by_date_range(from_date: str = Query(...), to_date: str = 
         JOIN teams at ON m.away_team_id = at.team_id
         JOIN leagues l ON m.league_id = l.league_id
         WHERE m.match_date >= ? AND m.match_date <= ?
-        ORDER BY m.match_date, m.match_time
-    """, (from_date, to_date))
+          AND ht.name_en NOT LIKE 'W%'
+          AND at.name_en NOT LIKE 'W%'
+          AND ht.name_en NOT LIKE '待定%'
+          AND at.name_en NOT LIKE '待定%'
+          AND ht.name_en NOT LIKE 'Team %'
+          AND at.name_en NOT LIKE 'Team %'
+          AND ht.name_en NOT LIKE 'Team %'
+          AND at.name_en NOT LIKE 'Team %'
+    """
+    params = [from_date, to_date]
+
+    # 白名单过滤
+    base_query, params = apply_whitelist_filter(base_query, params, conn)
+
+    base_query += " ORDER BY m.match_date, m.match_time, m.league_id"
+
+    cursor.execute(base_query, params)
     matches = [dict(row) for row in cursor.fetchall()]
 
+    # 先解析中文名(去重需要用CN名作为key)
     for match in matches:
         match['home_team_cn'] = match.get('home_team_cn') or get_chinese_team_name(match['home_team'])
         match['away_team_cn'] = match.get('away_team_cn') or get_chinese_team_name(match['away_team'])
@@ -250,6 +332,26 @@ async def get_matches_by_date_range(from_date: str = Query(...), to_date: str = 
         match['local_date'] = time_info.get('local_date', match['match_date'])
         match['date_changed'] = time_info.get('date_changed', False)
         match['time_type'] = time_type
+
+    # 去重: 使用CN名(因为不同英文拼写可能映射同一中文)
+    # 优先保留较低league_id(主数据源)
+    seen = {}
+    deduped = []
+    for match in matches:
+        home_cn = match.get('home_team_cn', match.get('home_team', ''))
+        away_cn = match.get('away_team_cn', match.get('away_team', ''))
+        date = match.get('match_date', '')
+        key = (home_cn, away_cn, date)
+        if key in seen:
+            prev_idx = seen[key]
+            prev = deduped[prev_idx]
+            # 优先: 较低league_id(主数据源)
+            if match.get('league_id', 99999) < prev.get('league_id', 99999):
+                deduped[prev_idx] = match
+        else:
+            seen[key] = len(deduped)
+            deduped.append(match)
+    matches = deduped
 
     conn.close()
     return {"data": matches, "from": from_date, "to": to_date, "count": len(matches)}
@@ -265,7 +367,7 @@ async def get_matches_by_date(date: str):
     dt = _dt.strptime(date, '%Y-%m-%d')
     prev_day = (dt - _td(days=1)).strftime('%Y-%m-%d')
 
-    cursor.execute("""
+    query = """
         SELECT m.match_id, m.match_date, m.match_time, m.time_type,
                m.home_team_id, m.away_team_id,
                l.name_en as league, l.name_cn as league_cn, l.country as league_country, l.league_id,
@@ -277,8 +379,19 @@ async def get_matches_by_date(date: str):
         JOIN teams at ON m.away_team_id = at.team_id
         JOIN leagues l ON m.league_id = l.league_id
         WHERE m.match_date IN (?, ?)
-        ORDER BY m.match_date, m.match_time
-    """, (prev_day, date))
+          AND ht.name_en NOT LIKE 'W%'
+          AND at.name_en NOT LIKE 'W%'
+          AND ht.name_en NOT LIKE '待定%'
+          AND at.name_en NOT LIKE '待定%'
+          AND ht.name_en NOT LIKE 'Team %'
+          AND at.name_en NOT LIKE 'Team %'
+          AND ht.name_en NOT LIKE 'Team %'
+          AND at.name_en NOT LIKE 'Team %'
+    """
+    params = [prev_day, date]
+    query, params = apply_whitelist_filter(query, params, conn)
+    query += " ORDER BY m.match_date, m.match_time"
+    cursor.execute(query, params)
     all_matches = [dict(row) for row in cursor.fetchall()]
 
     # 转北京时间后过滤
@@ -332,6 +445,12 @@ async def get_matches_list(
         JOIN teams at ON m.away_team_id = at.team_id
         LEFT JOIN seasons s ON m.season_id = s.season_id
         WHERE 1=1
+          AND ht.name_en NOT LIKE 'W%'
+          AND at.name_en NOT LIKE 'W%'
+          AND ht.name_en NOT LIKE '待定%'
+          AND at.name_en NOT LIKE '待定%'
+          AND ht.name_en NOT LIKE 'Team %'
+          AND at.name_en NOT LIKE 'Team %'
     """
     params = []
 
@@ -350,6 +469,9 @@ async def get_matches_list(
     if date_to:
         query += " AND m.match_date <= ?"
         params.append(date_to)
+
+    # 白名单过滤
+    query, params = apply_whitelist_filter(query, params, conn, 'm.league_id')
 
     query += " ORDER BY m.match_date DESC, m.match_time LIMIT ?"
     params.append(limit)
@@ -370,7 +492,7 @@ async def get_upcoming_matches(days: int = 7):
     today = datetime.now().strftime('%Y-%m-%d')
     end_date = (datetime.now() + timedelta(days=days)).strftime('%Y-%m-%d')
 
-    cursor.execute("""
+    query = """
         SELECT m.match_id, m.match_date, m.match_time, m.time_type,
                m.home_team_id, m.away_team_id,
                l.name_en as league, l.name_cn as league_cn, l.country as league_country, l.league_id,
@@ -382,10 +504,20 @@ async def get_upcoming_matches(days: int = 7):
         JOIN teams at ON m.away_team_id = at.team_id
         JOIN leagues l ON m.league_id = l.league_id
         WHERE m.match_date >= ? AND m.match_date <= ? AND m.status = 'scheduled'
-        ORDER BY m.match_date, m.match_time
-    """, (today, end_date))
+          AND ht.name_en NOT LIKE 'W%'
+          AND at.name_en NOT LIKE 'W%'
+          AND ht.name_en NOT LIKE '待定%'
+          AND at.name_en NOT LIKE '待定%'
+          AND ht.name_en NOT LIKE 'Team %'
+          AND at.name_en NOT LIKE 'Team %'
+    """
+    params = [today, end_date]
+    query, params = apply_whitelist_filter(query, params, conn)
+    query += " ORDER BY m.match_date, m.match_time"
+    cursor.execute(query, params)
     matches = [dict(row) for row in cursor.fetchall()]
 
+    # 先解析中文名(去重需要用CN名作为key)
     for match in matches:
         match['home_team_cn'] = match.get('home_team_cn') or get_chinese_team_name(match['home_team'])
         match['away_team_cn'] = match.get('away_team_cn') or get_chinese_team_name(match['away_team'])
@@ -396,6 +528,25 @@ async def get_upcoming_matches(days: int = 7):
         match['beijing_time'] = time_info['beijing_time']
         match['local_time'] = time_info['local_time']
         match['time_type'] = time_type
+
+    # 去重: 使用CN名(因为不同英文拼写可能映射同一中文)
+    # 优先保留较低league_id(主数据源)
+    seen = {}
+    deduped = []
+    for match in matches:
+        home_cn = match.get('home_team_cn', match.get('home_team', ''))
+        away_cn = match.get('away_team_cn', match.get('away_team', ''))
+        date = match.get('match_date', '')
+        key = (home_cn, away_cn, date)
+        if key in seen:
+            prev_idx = seen[key]
+            prev = deduped[prev_idx]
+            if match.get('league_id', 99999) < prev.get('league_id', 99999):
+                deduped[prev_idx] = match
+        else:
+            seen[key] = len(deduped)
+            deduped.append(match)
+    matches = deduped
 
     conn.close()
     return {"data": matches, "days": days}

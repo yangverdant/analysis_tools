@@ -1496,14 +1496,14 @@ export default {
         teamEndpoints.sixPointer = () => analysisAPI.getSixPointerAnalysis(homeId, awayId, leagueId, seasonId)
         teamEndpoints.poissonHome = () => analysisAPI.getTeamGoalDistribution(homeId, true)
         teamEndpoints.poissonAway = () => analysisAPI.getTeamGoalDistribution(awayId, false)
-        teamEndpoints.rotationRiskHome = () => analysisAPI.getTeamRotationRisk(homeId, leagueId, seasonId)
-        teamEndpoints.rotationRiskAway = () => analysisAPI.getTeamRotationRisk(awayId, leagueId, seasonId)
+        teamEndpoints.rotationRiskHome = () => analysisAPI.getRotationRisk(homeId, leagueId, seasonId)
+        teamEndpoints.rotationRiskAway = () => analysisAPI.getRotationRisk(awayId, leagueId, seasonId)
         teamEndpoints.seasonScenarioHome = () => analysisAPI.getTeamSeasonScenario(homeId, leagueId, seasonId)
         teamEndpoints.seasonScenarioAway = () => analysisAPI.getTeamSeasonScenario(awayId, leagueId, seasonId)
-        teamEndpoints.managerChangeHome = () => analysisAPI.getTeamManagerChangeEffect(homeId).catch(() => null)
-        teamEndpoints.managerChangeAway = () => analysisAPI.getTeamManagerChangeEffect(awayId).catch(() => null)
-        teamEndpoints.squadHome = () => analysisAPI.getTeamSquadAnalysis(homeId).catch(() => null)
-        teamEndpoints.squadAway = () => analysisAPI.getTeamSquadAnalysis(awayId).catch(() => null)
+        teamEndpoints.managerChangeHome = () => analysisAPI.getManagerChangeEffect(homeId, matchDate).catch(() => null)
+        teamEndpoints.managerChangeAway = () => analysisAPI.getManagerChangeEffect(awayId, matchDate).catch(() => null)
+        teamEndpoints.squadHome = () => Promise.resolve(null)
+        teamEndpoints.squadAway = () => Promise.resolve(null)
       }
 
       const results = {}

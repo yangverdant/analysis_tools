@@ -5,6 +5,6 @@
 特色: 比赛阵容预测/首发阵容
 """
 
-BASE_URL = "https://www.bifen188.com"
+BASE_URL = "http://www.bifen188.com"
 REQUEST_TIMEOUT = 15
 REQUEST_INTERVAL = 3

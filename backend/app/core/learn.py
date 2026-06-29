@@ -41,15 +41,28 @@ def _get_model_version() -> str:
         return "3.9.2"
 
 
+def _get_unique_model_version(conn: sqlite3.Connection) -> str:
+    """Return a unique model_weights.version for a learning write."""
+    base = _get_model_version()
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    candidate = f"{base}-learn-{stamp}"
+    suffix = 1
+    while conn.execute("SELECT 1 FROM model_weights WHERE version = ?", (candidate,)).fetchone():
+        suffix += 1
+        candidate = f"{base}-learn-{stamp}-{suffix}"
+    return candidate
+
+
 @dataclass
 class LearnResult:
     adjustments: int
     details: List[dict]
     circuit_breaks: List[dict]
+    error: Optional[str] = None
 
 
 def learn(db_path: str = None, agent=None, days: int = 30, min_samples: int = 10) -> LearnResult:
-    """参数学习主函数 — 数据驱动 + 回测验证 + Agent确认"""
+    """参数学习主函数 — 数据驱动 + 回测验证 + Agent确认 + Gate门控"""
     db_path = db_path or _get_db_path()
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -63,6 +76,10 @@ def learn(db_path: str = None, agent=None, days: int = 30, min_samples: int = 10
             agent = None
 
     try:
+        # 0. Gate: 备份当前权重(学习前快照)
+        weight_backup = _backup_active_weights(conn)
+        pre_accuracy = _snapshot_overall_accuracy(conn, days=days)
+
         # 1. 按场景+参赛方类型统计准确率
         scene_stats = compute_scene_accuracy(conn, days=days, min_samples=min_samples)
 
@@ -77,39 +94,46 @@ def learn(db_path: str = None, agent=None, days: int = 30, min_samples: int = 10
         circuit_breaks = []
 
         for key, stats in scene_stats.items():
-            scene, p_type = key
+            if len(key) == 3:
+                scene, p_type, play_type = key
+            else:
+                scene, p_type = key
+                play_type = 'spf'
 
             if stats["total"] < min_samples:
-                logger.info(f'{scene}({p_type}): 样本{stats["total"]}<{min_samples}, 跳过')
+                logger.info(f'{scene}({p_type}/{play_type}): 样本{stats["total"]}<{min_samples}, 跳过')
                 continue
 
             # 2. 熔断检测
             if stats["model_accuracy"] < stats["odds_baseline"] - 0.03:
                 circuit_breaks.append({
-                    "scene": scene, "participant_type": p_type,
+                    "scene": scene, "participant_type": p_type, "play_type": play_type,
                     "model_accuracy": stats["model_accuracy"],
                     "odds_baseline": stats["odds_baseline"],
                     "action": "reduce_model_weight",
                     "reason": f"模型{stats['model_accuracy']:.0%} < 赔率{stats['odds_baseline']:.0%}"
                 })
-                record_circuit_break(conn, scene, p_type, stats)
+                record_circuit_break(conn, scene, p_type, stats, play_type=play_type)
                 continue
 
             # 3. 找问题因子
-            problem_factors = identify_problem_factors(conn, scene, p_type, stats)
+            problem_factors = identify_problem_factors(conn, scene, p_type, stats,
+                                                       play_type=play_type)
             for factor_name, current_weight in problem_factors:
                 direction = determine_direction(factor_name, stats)
                 new_weight = current_weight * (1 + direction * 0.10)
+                detail_new_weight = new_weight
 
-                # 4. 回测验证
-                bt = backtest(conn, factor_name, current_weight, new_weight, scene, p_type, days)
+                # 4. 回测验证 — 按play_type筛选
+                bt = backtest(conn, factor_name, current_weight, new_weight, scene, p_type, days,
+                              play_type=play_type)
 
                 if bt["improved"]:
                     # 5. Agent确认(可选，只在调整幅度>5%时)
                     if abs(new_weight - current_weight) / max(current_weight, 0.01) > 0.05 and agent:
                         try:
                             decision = agent.param_adjustment(
-                                {key: stats}, get_current_weights(conn, scene, p_type)
+                                {str(key): stats}, get_current_weights(conn, scene, p_type)
                             )
                             if decision and decision.get("adjustments"):
                                 approved = any(
@@ -121,43 +145,89 @@ def learn(db_path: str = None, agent=None, days: int = 30, min_samples: int = 10
                                     continue
                                 logger.info(f'Agent批准调整: {factor_name} {current_weight:.3f}→{new_weight:.3f}')
                             elif decision is None:
-                                # Agent不可用(fallback)，直接通过
                                 logger.info(f'Agent不可用，规则引擎直接通过: {factor_name}')
                         except Exception as e:
                             logger.warning(f'Agent确认失败，使用回测结果: {e}')
 
-                    apply_weight_change(conn, factor_name, current_weight, new_weight, scene, p_type)
-                    record_param_history(conn, factor_name, current_weight, new_weight,
-                                         scene=scene, participant_type=p_type,
-                                         reason=f"{scene}({p_type})场景准确率低",
-                                         backtest=bt)
+                    # O/U和BF因子直接记录，不更新7因子权重表
+                    if play_type in ('ou', 'bf'):
+                        record_param_history(conn, factor_name, current_weight, new_weight,
+                                             scene, p_type,
+                                             f"{scene}({p_type})/{play_type}准确率低",
+                                             bt, play_type=play_type)
+                    else:
+                        applied_weights = apply_weight_change(conn, factor_name, current_weight, new_weight, scene, p_type)
+                        applied_new_weight = applied_weights.get(factor_name, new_weight)
+                        detail_new_weight = applied_new_weight
+
+                        verification = _verify_weight_effect(conn, factor_name, applied_new_weight, scene, p_type, db_path)
+                        if not verification.get('verified'):
+                            logger.warning(f'权重验证失败: {verification}')
+
+                        record_param_history(conn, factor_name, current_weight, detail_new_weight,
+                                             scene, p_type,
+                                             f"{scene}({p_type})/{play_type}准确率低",
+                                             bt, play_type=play_type)
+
                     adjustments.append({
                         "factor": factor_name, "scene": scene, "participant_type": p_type,
-                        "old": current_weight, "new": new_weight,
+                        "play_type": play_type,
+                        "old": current_weight,
+                        "new": detail_new_weight,
                         "improved": bt["improved"]
                     })
 
-        # 6. 更新model_accuracy统计表
+        # 6. O/U专项优化
+        ou_result = optimize_ou_thresholds(db_path, days=days, conn=conn)
+        if ou_result.get("adjustments"):
+            for adj in ou_result["adjustments"]:
+                adjustments.append({
+                    "factor": adj["param"], "scene": "ou_global", "participant_type": "all",
+                    "play_type": "ou",
+                    "old": adj["old"], "new": adj["new"],
+                    "improved": True,
+                })
+
+        # 7. 更新model_accuracy统计表
         update_model_accuracy(conn, scene_stats)
 
+        # 8. Gate: 学习后门控 — 如果整体准确率下降>1pp则回滚
+        if adjustments:
+            post_accuracy = _snapshot_overall_accuracy(conn, days=days)
+            gate = _gate_check(pre_accuracy, post_accuracy, overall_tolerance_pp=1.0)
+            if gate['rollback']:
+                logger.warning(f'Gate触发回滚: {gate["reason"]}')
+                _restore_active_weights(conn, weight_backup)
+                adjustments = []
+                circuit_breaks.append({
+                    "scene": "gate", "participant_type": "all", "play_type": "spf",
+                    "model_accuracy": post_accuracy,
+                    "odds_baseline": pre_accuracy,
+                    "action": "rollback_all_weights",
+                    "reason": gate['reason'],
+                })
+
         conn.commit()
-        logger.info(f'学习完成: {len(adjustments)}项调整, {len(circuit_breaks)}项熔断')
+        logger.info(f'学习完成: {len(adjustments)}项调整, {len(circuit_breaks)}项熔断 (含O/U专项)')
         return LearnResult(adjustments=len(adjustments), details=adjustments, circuit_breaks=circuit_breaks)
 
     except Exception as e:
         logger.error(f"Learn failed: {e}")
         conn.rollback()
-        return LearnResult(adjustments=0, details=[], circuit_breaks=[])
+        return LearnResult(adjustments=0, details=[], circuit_breaks=[], error=str(e))
     finally:
         conn.close()
 
 
-def compute_scene_accuracy(conn, days: int = 30, min_samples: int = 10) -> Dict[Tuple[str, str], dict]:
-    """按场景+参赛方类型统计准确率 — 优先从lottery_validation读取"""
+def compute_scene_accuracy(conn, days: int = 30, min_samples: int = 10) -> Dict[Tuple[str, str, str], dict]:
+    """按场景+参赛方类型+玩法统计准确率 — 优先从lottery_validation读取
+
+    Returns: Dict keyed by (scenario, participant_type, play_type)
+    """
     cutoff = f"-{days} days"
     stats = {}
 
-    # 数据源1: lottery_validation (日循环写入)
+    # 数据源1: lottery_validation (日循环写入) — now includes play_type
     try:
         cursor = conn.execute("""
             SELECT
@@ -166,17 +236,18 @@ def compute_scene_accuracy(conn, days: int = 30, min_samples: int = 10) -> Dict[
                     WHEN lm.league_name_cn LIKE '%国际%' OR lm.league_name_cn LIKE '%世预%' THEN 'national'
                     ELSE 'club'
                 END as participant_type,
+                lv.play_type,
                 COUNT(*) as total,
                 SUM(lv.is_correct) as model_correct,
                 AVG(lv.brier_score) as model_brier
             FROM lottery_validation lv
             JOIN lottery_matches lm ON lv.lottery_match_id = lm.lottery_match_id
             WHERE lv.validated_at >= datetime('now', ?)
-            GROUP BY scene, participant_type
+            GROUP BY scene, participant_type, lv.play_type
         """, (cutoff,))
 
         for row in cursor.fetchall():
-            key = (row["scene"] or "unknown", row["participant_type"] or "club")
+            key = (row["scene"] or "unknown", row["participant_type"] or "club", row["play_type"] or "spf")
             total = row["total"] or 0
             model_correct = row["model_correct"] or 0
             model_acc = model_correct / total if total > 0 else 0
@@ -208,7 +279,7 @@ def compute_scene_accuracy(conn, days: int = 30, min_samples: int = 10) -> Dict[
         """, (cutoff,))
 
         for row in cursor.fetchall():
-            key = (row["scene"] or "unknown", row["participant_type"] or "club")
+            key = (row["scene"] or "unknown", row["participant_type"] or "club", "spf")  # old system only has spf
             total = row["total"] or 0
             model_correct = row["model_correct"] or 0
             model_acc = model_correct / total if total > 0 else 0
@@ -241,7 +312,29 @@ def compute_scene_accuracy(conn, days: int = 30, min_samples: int = 10) -> Dict[
 
 
 def compute_odds_baseline(conn, key, cutoff) -> float:
-    """计算赔率基线准确率 — 如果总是选赔率argmax，准确率是多少"""
+    """计算赔率基线准确率 — 按play_type分别计算"""
+    play_type = key[2] if len(key) == 3 else 'spf'
+
+    if play_type == 'ou':
+        return _compute_ou_odds_baseline(conn, cutoff)
+
+    # BF/BQC/RQSPF: 无直接赔率基线，用整体验证准确率估算
+    if play_type in ('bf', 'bqc', 'rqspf'):
+        try:
+            row = conn.execute("""
+                SELECT COUNT(*) as total, SUM(is_correct) as correct
+                FROM lottery_validation
+                WHERE play_type = ? AND validated_at >= datetime('now', ?)
+            """, (play_type, cutoff)).fetchone()
+            if row and row["total"] >= 5:
+                return round((row["correct"] or 0) / row["total"], 4)
+        except Exception:
+            pass
+        # 这些玩法随机猜测基线
+        random_baselines = {'bf': 0.10, 'bqc': 0.11, 'rqspf': 0.33}
+        return random_baselines.get(play_type, 0.33)
+
+    # SPF: 如果总是选赔率argmax，准确率是多少
     # 直接从lottery_odds计算argmax准确率
     try:
         rows = conn.execute("""
@@ -300,16 +393,17 @@ def compute_odds_baseline(conn, key, cutoff) -> float:
     except Exception:
         pass
 
-    # 无数据时使用经验值
-    baselines = {
-        ("league", "club"): 0.50,
-        ("cup", "club"): 0.48,
-        ("friendly", "national"): 0.35,
-        ("friendly", "club"): 0.42,
-        ("wc", "national"): 0.45,
-        ("qualifier", "national"): 0.43,
-    }
-    return baselines.get(key, 0.45)
+    # 无数据时从整体验证数据估算，而非用per-scenario硬编码值
+    try:
+        row = conn.execute("SELECT COUNT(*) as total FROM lottery_validation").fetchone()
+        if row and row["total"] >= 10:
+            correct = conn.execute("SELECT SUM(is_correct) FROM lottery_validation").fetchone()[0]
+            return round(correct / row["total"], 4)
+    except Exception:
+        pass
+
+    # 最终fallback: 单一通用值
+    return 0.45
 
 
 def _parse_odds_valid(odds_data) -> bool:
@@ -324,8 +418,70 @@ def _parse_odds_valid(odds_data) -> bool:
         return False
 
 
-def identify_problem_factors(conn, scene, p_type, stats) -> List[Tuple[str, float]]:
-    """找出问题因子"""
+def _compute_ou_odds_baseline(conn, cutoff) -> float:
+    """计算O/U赔率基线: 始终选over/under中概率更高的那个，看准确率"""
+    try:
+        rows = conn.execute("""
+            SELECT lo.lottery_match_id, lo.odds_data, lr.ou_result
+            FROM lottery_odds lo
+            JOIN lottery_results lr ON lo.lottery_match_id = lr.lottery_match_id
+            WHERE lo.play_type = 'ou'
+            AND lr.ou_result IS NOT NULL
+            AND lo.lottery_match_id IN (
+                SELECT lottery_match_id FROM lottery_validation
+                WHERE play_type = 'ou' AND validated_at >= datetime('now', ?)
+            )
+        """, (cutoff,)).fetchall()
+
+        if len(rows) >= 5:
+            correct = 0
+            total = 0
+            for row in rows:
+                odds = json.loads(row["odds_data"]) if isinstance(row["odds_data"], str) else row["odds_data"]
+                over_odds = float(odds.get("over", odds.get("大", 0)) or 0)
+                under_odds = float(odds.get("under", odds.get("小", 0)) or 0)
+                if over_odds < 1 or under_odds < 1:
+                    continue
+                total += 1
+                # 选概率更高的一方(赔率更低)
+                predicted = "大" if over_odds < under_odds else "小"
+                actual = row["ou_result"]
+                if actual.startswith(predicted):
+                    correct += 1
+            if total >= 5:
+                return round(correct / total, 4)
+    except Exception as e:
+        logger.debug(f"O/U赔率基线计算失败: {e}")
+
+    # fallback: 从lottery_validation中ou的is_correct比例推算
+    try:
+        row = conn.execute("""
+            SELECT COUNT(*) as total, SUM(is_correct) as correct
+            FROM lottery_validation
+            WHERE play_type = 'ou' AND validated_at >= datetime('now', ?)
+        """, (cutoff,)).fetchone()
+        if row and row["total"] >= 5:
+            return round((row["correct"] or 0) / row["total"], 4)
+    except Exception:
+        pass
+
+    return 0.50
+
+
+def identify_problem_factors(conn, scene, p_type, stats,
+                              play_type='spf') -> List[Tuple[str, float]]:
+    """找出问题因子 — 按play_type区分优化对象
+
+    spf/bqc/rqspf: 7因子权重
+    ou: confidence阈值 + line选择策略
+    bf: Poisson xG lambda缩放因子
+    """
+    if play_type == 'ou':
+        return _identify_ou_factors(conn, stats)
+    if play_type == 'bf':
+        return _identify_bf_factors(conn, stats)
+
+    # SPF/BQC/RQSPF: 7因子权重
     weights = get_current_weights(conn, scene, p_type)
     factors = []
 
@@ -336,15 +492,71 @@ def identify_problem_factors(conn, scene, p_type, stats) -> List[Tuple[str, floa
     return factors[:3]
 
 
+def _identify_ou_factors(conn, stats) -> List[Tuple[str, float]]:
+    """O/U问题因子: confidence阈值和line偏移"""
+    factors = []
+    try:
+        row = conn.execute("""
+            SELECT param_name, new_value FROM model_params_history
+            WHERE param_name LIKE 'ou_%'
+            ORDER BY changed_at DESC LIMIT 5
+        """).fetchall()
+        # 当前confidence阈值
+        conf_row = [r for r in row if r[0] == 'ou_confidence_threshold']
+        current_conf = conf_row[0][1] if conf_row else 0.55
+        factors.append(('ou_confidence_threshold', current_conf))
+
+        # 当前line偏移(0=默认line, 正=偏好大球, 负=偏好小球)
+        line_row = [r for r in row if r[0] == 'ou_line_offset']
+        current_offset = line_row[0][1] if line_row else 0.0
+        factors.append(('ou_line_offset', current_offset))
+    except Exception:
+        factors.append(('ou_confidence_threshold', 0.55))
+        factors.append(('ou_line_offset', 0.0))
+    return factors
+
+
+def _identify_bf_factors(conn, stats) -> List[Tuple[str, float]]:
+    """BF问题因子: Poisson lambda缩放"""
+    factors = []
+    try:
+        row = conn.execute("""
+            SELECT param_name, new_value FROM model_params_history
+            WHERE param_name = 'bf_lambda_scale'
+            ORDER BY changed_at DESC LIMIT 1
+        """).fetchall()
+        current = row[0][1] if row else 1.0
+        factors.append(('bf_lambda_scale', current))
+    except Exception:
+        factors.append(('bf_lambda_scale', 1.0))
+    return factors
+
+
 def determine_direction(factor, stats) -> float:
     """确定调整方向"""
+    if factor == 'ou_confidence_threshold':
+        # 高confidence准确率低 → 阈值太低需调高(+1), 反之调低(-1)
+        if stats["model_accuracy"] < stats["odds_baseline"]:
+            return 1.0  # 提高阈值，减少低质量推荐
+        return -1.0  # 降低阈值，扩大覆盖
+    if factor == 'ou_line_offset':
+        # O/U方向需看over/under哪边准确率更低
+        if stats["model_accuracy"] < stats["odds_baseline"]:
+            return -1.0  # 偏移调低，更保守
+        return 1.0
+    if factor == 'bf_lambda_scale':
+        if stats["model_accuracy"] < stats["odds_baseline"]:
+            return -0.5  # lambda向1.0回归
+        return 0.5
+
     if stats["model_accuracy"] < stats["odds_baseline"]:
         return -1.0
     return 1.0
 
 
-def backtest(conn, factor, old_weight, new_weight, scene, p_type, days) -> dict:
-    """历史数据回测 — 用验证数据重新计算概率
+def backtest(conn, factor, old_weight, new_weight, scene, p_type, days,
+             play_type='spf') -> dict:
+    """历史数据回测 — 按play_type筛选验证数据重新计算概率
 
     方法:
     1. 从lottery_validation获取预测概率+实际结果
@@ -353,7 +565,7 @@ def backtest(conn, factor, old_weight, new_weight, scene, p_type, days) -> dict:
     """
     cutoff = f"-{days} days"
 
-    # 获取验证记录中的概率数据
+    # 获取验证记录中的概率数据 — 按play_type筛选
     try:
         rows = conn.execute("""
             SELECT lv.predicted_result, lv.actual_result, lv.is_correct,
@@ -361,7 +573,8 @@ def backtest(conn, factor, old_weight, new_weight, scene, p_type, days) -> dict:
             FROM lottery_validation lv
             JOIN lottery_matches lm ON lv.lottery_match_id = lm.lottery_match_id
             WHERE lv.validated_at >= datetime('now', ?)
-        """, (cutoff,)).fetchall()
+            AND lv.play_type = ?
+        """, (cutoff, play_type)).fetchall()
 
         if len(rows) < 5:
             # 样本不足，无法可靠回测
@@ -484,16 +697,18 @@ def apply_weight_change(conn, factor, old_weight, new_weight, scene, p_type):
          is_active, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
     """, (
-        _get_model_version(),
+        _get_unique_model_version(conn),
         weight_map["elo"], weight_map["poisson"], weight_map["h2h"],
         weight_map["form"], weight_map["home_away"],
         weight_map["motivation"], weight_map["news_factors"],
         datetime.now().isoformat()
     ))
+    return weight_map
 
 
-def record_param_history(conn, param_name, old_value, new_value, scene, p_type, reason, backtest):
-    """记录参数变更历史"""
+def record_param_history(conn, param_name, old_value, new_value, scene, p_type,
+                          reason, backtest, play_type='spf'):
+    """记录参数变更历史 — param_name编码包含play_type"""
     conn.execute("""
         INSERT INTO model_params_history
         (model_version, param_name, old_value, new_value, change_reason,
@@ -501,7 +716,7 @@ def record_param_history(conn, param_name, old_value, new_value, scene, p_type, 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         _get_model_version(),
-        f"{param_name}_{scene}_{p_type}",
+        f"{param_name}_{scene}_{p_type}_{play_type}",
         old_value, new_value,
         f"{reason} | backtest: improved={backtest.get('improved')}",
         backtest.get("old_accuracy", 0),
@@ -511,7 +726,7 @@ def record_param_history(conn, param_name, old_value, new_value, scene, p_type, 
     ))
 
 
-def record_circuit_break(conn, scene, p_type, stats):
+def record_circuit_break(conn, scene, p_type, stats, play_type='spf'):
     """记录熔断事件"""
     conn.execute("""
         INSERT INTO model_params_history
@@ -520,9 +735,9 @@ def record_circuit_break(conn, scene, p_type, stats):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         _get_model_version(),
-        f"circuit_break_{scene}_{p_type}",
+        f"circuit_break_{scene}_{p_type}_{play_type}",
         1.0, 0.0,
-        f"熔断: 模型{stats['model_accuracy']:.0%} < 赔率{stats['odds_baseline']:.0%}",
+        f"熔断: 模型{stats['model_accuracy']:.0%} < 赔率{stats['odds_baseline']:.0%} ({play_type})",
         stats["model_accuracy"],
         stats["odds_baseline"],
         stats["total"],
@@ -531,9 +746,14 @@ def record_circuit_break(conn, scene, p_type, stats):
 
 
 def update_model_accuracy(conn, scene_stats):
-    """更新model_accuracy统计表"""
+    """更新model_accuracy统计表 — scene_type编码为{scenario}_{play_type}"""
     for key, stats in scene_stats.items():
-        scene, p_type = key
+        if len(key) == 3:
+            scene, p_type, play_type = key
+            scene_type = f"{scene}_{play_type}"
+        else:
+            scene, p_type = key
+            scene_type = scene
         conn.execute("""
             INSERT OR REPLACE INTO model_accuracy
             (scene_type, participant_type, total_matches,
@@ -541,8 +761,277 @@ def update_model_accuracy(conn, scene_stats):
              model_brier, odds_brier, period, calculated_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, '30d', ?)
         """, (
-            scene, p_type, stats["total"],
+            scene_type, p_type, stats["total"],
             stats["model_accuracy"], stats["odds_baseline"],
             stats["model_brier"], 0,
             datetime.now().isoformat()
         ))
+
+
+def _backup_active_weights(conn) -> Optional[dict]:
+    """Snapshot the current active model_weights row for rollback."""
+    try:
+        row = conn.execute("SELECT * FROM model_weights WHERE is_active = 1 LIMIT 1").fetchone()
+        if not row:
+            return None
+        return dict(row)
+    except Exception:
+        return None
+
+
+def _restore_active_weights(conn, backup: Optional[dict]) -> None:
+    """Restore weights from a backup snapshot, deactivating current and reactivating backup."""
+    if not backup:
+        return
+    try:
+        conn.execute("UPDATE model_weights SET is_active = 0 WHERE is_active = 1")
+        # Re-insert the backup as a new active row
+        version = _get_unique_model_version(conn) + '-rollback'
+        conn.execute("""
+            INSERT INTO model_weights
+            (version, elo_weight, poisson_weight, h2h_weight, form_weight,
+             home_away_weight, motivation_weight, news_factors_weight,
+             is_active, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+        """, (
+            version,
+            backup.get('elo_weight', 0.20), backup.get('poisson_weight', 0.25),
+            backup.get('h2h_weight', 0.10), backup.get('form_weight', 0.15),
+            backup.get('home_away_weight', 0.10), backup.get('motivation_weight', 0.10),
+            backup.get('news_factors_weight', 0.10),
+            datetime.now().isoformat()
+        ))
+        # Record the rollback in history
+        conn.execute("""
+            INSERT INTO model_params_history
+            (model_version, param_name, old_value, new_value, change_reason,
+             accuracy_before, accuracy_after, sample_size, changed_at)
+            VALUES (?, 'gate_rollback', 1.0, 0.0, 'Gate: overall accuracy dropped, rolling back all weight changes', ?, ?, 0, ?)
+        """, (
+            _get_model_version(),
+            backup.get('elo_weight', 0), 0,
+            datetime.now().isoformat()
+        ))
+        logger.info('Rolled back weights to pre-learning snapshot')
+    except Exception as e:
+        logger.error(f'Weight rollback failed: {e}')
+
+
+def _snapshot_overall_accuracy(conn, days: int = 30) -> float:
+    """Get overall SPF accuracy from lottery_validation for the last N days."""
+    try:
+        row = conn.execute("""
+            SELECT
+                COUNT(*) as total,
+                SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END) as correct
+            FROM lottery_validation
+            WHERE play_type = 'spf'
+              AND validated_at >= date('now', ?)
+        """, (f'-{days} days',)).fetchone()
+        if row and row['total'] > 0:
+            return round(row['correct'] / row['total'], 4)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _gate_check(pre_accuracy: float, post_accuracy: float, overall_tolerance_pp: float = 1.0) -> dict:
+    """Check if post-learning accuracy is acceptable vs pre-learning baseline."""
+    delta_pp = (post_accuracy - pre_accuracy) * 100
+    if delta_pp < -abs(overall_tolerance_pp):
+        return {
+            'rollback': True,
+            'reason': f'Overall accuracy dropped {abs(delta_pp):.1f}pp (pre={pre_accuracy:.1%}, post={post_accuracy:.1%})',
+            'delta_pp': round(delta_pp, 1),
+        }
+    return {
+        'rollback': False,
+        'reason': f'Accuracy change: {delta_pp:+.1f}pp (pre={pre_accuracy:.1%}, post={post_accuracy:.1%})',
+        'delta_pp': round(delta_pp, 1),
+    }
+
+
+def _verify_weight_effect(conn, factor_name, expected_weight, scene, p_type, db_path=None) -> dict:
+    """After applying weight changes, verify the new weight is actually used by the analyzer.
+
+    Returns: {'verified': bool, 'expected': float, 'actual': float}
+    """
+    try:
+        from backend.app.analytics.comprehensive import ComprehensiveAnalyzer
+
+        if not db_path:
+            return {'verified': True, 'reason': 'no db_path for verification'}
+
+        analyzer = ComprehensiveAnalyzer(db_path)
+        current_weights = analyzer._get_weights()
+
+        actual_weight = current_weights.get(factor_name, 0)
+        verified = abs(expected_weight - actual_weight) < 0.02
+
+        return {
+            'verified': verified,
+            'expected': round(expected_weight, 4),
+            'actual': round(actual_weight, 4),
+            'reason': '' if verified else f'Weight mismatch: expected {expected_weight:.4f}, got {actual_weight:.4f}',
+        }
+    except Exception as e:
+        return {'verified': True, 'reason': f'verification skipped: {e}'}
+
+
+def optimize_ou_thresholds(db_path: str = None, days: int = 30, conn: sqlite3.Connection = None) -> dict:
+    """O/U专项优化: 分析confidence区间准确率，调整推荐阈值
+
+    逻辑:
+    - 高confidence(>0.55)准确率 < 50% → 阈值太低，需提高，减少低质量推荐
+    - 低confidence(<0.55)准确率 > 50% → 阈值太高，可降低，扩大覆盖
+    - 按盘口分档分析(line=2.5 vs line=3.0等)
+    """
+    db_path = db_path or _get_db_path()
+    owns_conn = conn is None
+    if owns_conn:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+    cutoff = f"-{days} days"
+
+    result = {"adjustments": [], "analysis": {}}
+
+    try:
+        # 按confidence区间统计准确率
+        rows = conn.execute("""
+            SELECT
+                CASE
+                    WHEN confidence >= 0.65 THEN 'high'
+                    WHEN confidence >= 0.55 THEN 'medium'
+                    ELSE 'low'
+                END as conf_band,
+                COUNT(*) as total,
+                SUM(is_correct) as correct,
+                AVG(predicted_prob) as avg_prob
+            FROM lottery_validation
+            WHERE play_type = 'ou'
+            AND validated_at >= datetime('now', ?)
+            GROUP BY conf_band
+        """, (cutoff,)).fetchall()
+
+        for row in rows:
+            total = row["total"] or 0
+            correct = row["correct"] or 0
+            acc = correct / total if total > 0 else 0
+            result["analysis"][row["conf_band"]] = {
+                "total": total,
+                "accuracy": round(acc, 4),
+                "avg_prob": round(row["avg_prob"] or 0, 4),
+            }
+
+        # 按盘口分档统计
+        line_rows = conn.execute("""
+            SELECT
+                CASE
+                    WHEN predicted_result LIKE '%2.5' THEN '2.5'
+                    WHEN predicted_result LIKE '%3%' THEN '3.0'
+                    WHEN predicted_result LIKE '%3.5' THEN '3.5'
+                    ELSE 'other'
+                END as line_band,
+                COUNT(*) as total,
+                SUM(is_correct) as correct
+            FROM lottery_validation
+            WHERE play_type = 'ou'
+            AND validated_at >= datetime('now', ?)
+            GROUP BY line_band
+        """, (cutoff,)).fetchall()
+
+        for row in line_rows:
+            total = row["total"] or 0
+            correct = row["correct"] or 0
+            acc = correct / total if total > 0 else 0
+            result["analysis"][f"line_{row['line_band']}"] = {
+                "total": total,
+                "accuracy": round(acc, 4),
+            }
+
+        # 读取当前阈值
+        try:
+            param_row = conn.execute("""
+                SELECT new_value FROM model_params_history
+                WHERE param_name LIKE 'ou_confidence_threshold%'
+                ORDER BY changed_at DESC LIMIT 1
+            """).fetchone()
+            current_threshold = param_row[0] if param_row else 0.55
+        except Exception:
+            current_threshold = 0.55
+
+        # 决策逻辑
+        high_stats = result["analysis"].get("high", {})
+        low_stats = result["analysis"].get("low", {})
+
+        if high_stats.get("total", 0) >= 5:
+            high_acc = high_stats["accuracy"]
+            if high_acc < 0.50:
+                # 高confidence推荐质量差 → 提高阈值
+                new_threshold = min(current_threshold + 0.03, 0.75)
+                result["adjustments"].append({
+                    "param": "ou_confidence_threshold",
+                    "old": current_threshold,
+                    "new": new_threshold,
+                    "reason": f"高confidence准确率{high_acc:.0%}<50%，提高阈值减少低质量推荐",
+                })
+                conn.execute("""
+                    INSERT INTO model_params_history
+                    (model_version, param_name, old_value, new_value, change_reason,
+                     accuracy_before, accuracy_after, sample_size, changed_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    _get_model_version(),
+                    "ou_confidence_threshold_auto",
+                    current_threshold, new_threshold,
+                    f"O/U专项优化: 高confidence准确率{high_acc:.0%}",
+                    high_acc, 0, high_stats["total"],
+                    datetime.now().isoformat()
+                ))
+            elif high_acc >= 0.55:
+                # 高confidence推荐质量好 → 可适当降低阈值扩大覆盖
+                new_threshold = max(current_threshold - 0.02, 0.40)
+                if new_threshold != current_threshold:
+                    result["adjustments"].append({
+                        "param": "ou_confidence_threshold",
+                        "old": current_threshold,
+                        "new": new_threshold,
+                        "reason": f"高confidence准确率{high_acc:.0%}>55%，可降低阈值扩大覆盖",
+                    })
+                    conn.execute("""
+                        INSERT INTO model_params_history
+                        (model_version, param_name, old_value, new_value, change_reason,
+                         accuracy_before, accuracy_after, sample_size, changed_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        _get_model_version(),
+                        "ou_confidence_threshold_auto",
+                        current_threshold, new_threshold,
+                        f"O/U专项优化: 高confidence准确率{high_acc:.0%}，降低阈值",
+                        high_acc, 0, high_stats["total"],
+                        datetime.now().isoformat()
+                    ))
+
+        if low_stats.get("total", 0) >= 5:
+            low_acc = low_stats["accuracy"]
+            if low_acc > 0.50:
+                # 低confidence推荐也有价值 → 降低阈值
+                new_threshold = max(current_threshold - 0.02, 0.40)
+                if not any(a["param"] == "ou_confidence_threshold" for a in result["adjustments"]):
+                    result["adjustments"].append({
+                        "param": "ou_confidence_threshold",
+                        "old": current_threshold,
+                        "new": new_threshold,
+                        "reason": f"低confidence准确率{low_acc:.0%}>50%，降低阈值扩大覆盖",
+                    })
+
+        if owns_conn:
+            conn.commit()
+
+    except Exception as e:
+        logger.error(f"O/U专项优化失败: {e}")
+    finally:
+        if owns_conn:
+            conn.close()
+
+    return result

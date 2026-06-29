@@ -20,7 +20,7 @@ def classify(state, db_path: str) -> dict:
     tomorrow = tomorrow_beijing()
     logger.info('=== 8:30 赛事分类 (%s ~ %s) ===', today, tomorrow)
 
-    from core.competition.engine import CompetitionRuleEngine, classify_match
+    from backend.app.core.competition.engine import CompetitionRuleEngine
     engine = CompetitionRuleEngine()
 
     matches = _get_matches(db_path, today, tomorrow)

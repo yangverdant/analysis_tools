@@ -5,6 +5,7 @@
 """
 
 import sqlite3
+import math
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 
@@ -36,9 +37,27 @@ class ComprehensiveAnalyzer:
     }
     DEFAULT_WEIGHTS = {'elo': 0.20, 'poisson': 0.25, 'adjusted': 0.55}
 
+    # 7因子权重配置 — learn.py调整的每个因子实际生效
+    WEIGHT_PROFILES_7 = {
+        'league':          {'elo': 0.20, 'poisson': 0.20, 'h2h': 0.08, 'form': 0.15, 'home_away': 0.10, 'motivation': 0.10, 'news_factors': 0.07},
+        'domestic_cup':    {'elo': 0.15, 'poisson': 0.15, 'h2h': 0.08, 'form': 0.12, 'home_away': 0.10, 'motivation': 0.15, 'news_factors': 0.10},
+        'continental_cup': {'elo': 0.20, 'poisson': 0.20, 'h2h': 0.08, 'form': 0.12, 'home_away': 0.08, 'motivation': 0.12, 'news_factors': 0.08},
+        'qualifier':       {'elo': 0.20, 'poisson': 0.20, 'h2h': 0.08, 'form': 0.12, 'home_away': 0.10, 'motivation': 0.12, 'news_factors': 0.08},
+        'nations_league':  {'elo': 0.20, 'poisson': 0.20, 'h2h': 0.08, 'form': 0.12, 'home_away': 0.10, 'motivation': 0.12, 'news_factors': 0.08},
+        'friendly':        {'elo': 0.15, 'poisson': 0.15, 'h2h': 0.05, 'form': 0.10, 'home_away': 0.08, 'motivation': 0.05, 'news_factors': 0.20},
+        'international_cup':{'elo': 0.20, 'poisson': 0.20, 'h2h': 0.08, 'form': 0.12, 'home_away': 0.08, 'motivation': 0.12, 'news_factors': 0.08},
+        'olympic':         {'elo': 0.15, 'poisson': 0.15, 'h2h': 0.05, 'form': 0.10, 'home_away': 0.08, 'motivation': 0.15, 'news_factors': 0.15},
+        'super_cup':       {'elo': 0.25, 'poisson': 0.20, 'h2h': 0.08, 'form': 0.12, 'home_away': 0.08, 'motivation': 0.10, 'news_factors': 0.07},
+        'playoff':         {'elo': 0.20, 'poisson': 0.20, 'h2h': 0.08, 'form': 0.12, 'home_away': 0.10, 'motivation': 0.12, 'news_factors': 0.08},
+        'wc_qualifier':    {'elo': 0.20, 'poisson': 0.20, 'h2h': 0.08, 'form': 0.12, 'home_away': 0.10, 'motivation': 0.12, 'news_factors': 0.08},
+        'friendly_intl':   {'elo': 0.15, 'poisson': 0.15, 'h2h': 0.05, 'form': 0.10, 'home_away': 0.08, 'motivation': 0.05, 'news_factors': 0.20},
+        'tournament_intl': {'elo': 0.25, 'poisson': 0.25, 'h2h': 0.06, 'form': 0.10, 'home_away': 0.06, 'motivation': 0.10, 'news_factors': 0.08},
+    }
+    DEFAULT_WEIGHTS_7 = {'elo': 0.20, 'poisson': 0.20, 'h2h': 0.08, 'form': 0.15, 'home_away': 0.10, 'motivation': 0.10, 'news_factors': 0.07}
+
     # model_weights缓存(避免每场预测都查DB)
-    _model_weights_cache = None
-    _model_weights_cache_time = None
+    _model_weights_cache = {}
+    _model_weights_cache_time = {}
 
     def __init__(self, db_path: str):
         self.db_path = db_path
@@ -122,8 +141,9 @@ class ComprehensiveAnalyzer:
                 }
 
         # 2. Poisson预测（作为基础预测）
+        is_neutral = match_profile is not None and hasattr(match_profile, 'is_neutral_venue') and match_profile.is_neutral_venue
         try:
-            poisson_prediction = self.poisson.predict_match(home_team_id, away_team_id, conn=conn)
+            poisson_prediction = self.poisson.predict_match(home_team_id, away_team_id, conn=conn, league_id=league_id, is_neutral_venue=is_neutral)
         except Exception as e:
             poisson_prediction = {'probabilities': {'home_win': 0.33, 'draw': 0.33, 'away_win': 0.33}, 'home_xg': 1.3, 'away_xg': 1.1, 'expected_score': {'home': 1.3, 'away': 1.1}, 'most_likely_scores': [{'score': '1-1', 'probability': 10}], 'over_under_2_5': {'probability': 0.48}, 'both_teams_to_score': {'probability': 0.5}}
 
@@ -344,7 +364,7 @@ class ComprehensiveAnalyzer:
             pass
 
         # 计算最终预测（加权融合）
-        weights = self._get_weights(match_profile)
+        weights = self._get_weights(match_profile, league_id=league_id)
         final_prediction = self._calculate_final_prediction(
             elo_prediction, poisson_prediction, adjusted_prediction, weights
         )
@@ -467,7 +487,7 @@ class ComprehensiveAnalyzer:
                 pass
 
         # 生成预测报告
-        weights = self._get_weights(match_profile)
+        weights = self._get_weights(match_profile, league_id=league_id)
         report = self._generate_prediction_report(
             home_team_id, away_team_id,
             elo_prediction, poisson_prediction, xg_analysis,
@@ -565,69 +585,88 @@ class ComprehensiveAnalyzer:
             'report': report
         }
 
-    def _get_weights(self, match_profile=None) -> Dict:
-        """根据MatchProfile获取融合权重 — model_weights表优先，WEIGHT_PROFILES兜底"""
-        # 尝试从model_weights表读取(缓存5分钟)
-        db_weights = self._load_model_weights()
-        if db_weights:
-            # model_weights存7个因子: elo, poisson, h2h, form, home_away, motivation, news_factors
-            # 映射到3键: elo, poisson, adjusted(=h2h+form+home_away+motivation+news_factors)
-            elo_w = db_weights.get('elo', 0.20)
-            poisson_w = db_weights.get('poisson', 0.25)
-            adjusted_w = (
-                db_weights.get('h2h', 0.10) +
-                db_weights.get('form', 0.15) +
-                db_weights.get('home_away', 0.10) +
-                db_weights.get('motivation', 0.10) +
-                db_weights.get('news_factors', 0.10)
-            )
-            # 归一化
-            total = elo_w + poisson_w + adjusted_w
-            if total > 0:
-                return {
-                    'elo': round(elo_w / total, 4),
-                    'poisson': round(poisson_w / total, 4),
-                    'adjusted': round(adjusted_w / total, 4),
-                    '_source': 'model_weights',
-                }
+    def _get_weights(self, match_profile=None, league_id=None) -> Dict:
+        """根据MatchProfile获取融合权重 — model_weights表优先(按联赛)，WEIGHT_PROFILES兜底
 
-        # 兜底: WEIGHT_PROFILES
+        查找顺序: model_weights(league_id) → model_weights(global) → WEIGHT_PROFILES_7
+        """
+        # 尝试从model_weights表读取(按联赛优先)
+        db_weights = self._load_model_weights(league_id=league_id)
+        if db_weights:
+            total = sum(db_weights.values())
+            if total > 0:
+                return {k: round(v / total, 4) for k, v in db_weights.items()} | {'_source': 'model_weights'}
+
+        # 兜底: WEIGHT_PROFILES_7 (7因子版本)
         if match_profile is not None and hasattr(match_profile, 'competition_type'):
             ct = match_profile.competition_type.value
-            return self.WEIGHT_PROFILES.get(ct, self.DEFAULT_WEIGHTS).copy()
-        return self.DEFAULT_WEIGHTS.copy()
+            return self.WEIGHT_PROFILES_7.get(ct, self.DEFAULT_WEIGHTS_7).copy()
+        return self.DEFAULT_WEIGHTS_7.copy()
 
-    def _load_model_weights(self) -> Dict:
-        """从model_weights表加载活跃权重(5分钟缓存)"""
+    def _load_model_weights(self, league_id=None) -> Dict:
+        """从model_weights表加载活跃权重(5分钟缓存)
+
+        优先查找league_id匹配的行, 否则使用全局(is_active=1且league_id IS NULL)的行
+        """
         import time
         now = time.time()
-        if self._model_weights_cache and self._model_weights_cache_time and (now - self._model_weights_cache_time) < 300:
-            return self._model_weights_cache
+        # 缓存key包含league_id
+        cache_key = f'league_{league_id}' if league_id else 'global'
+        cache = getattr(self, '_model_weights_cache', None) or {}
+        cache_time = getattr(self, '_model_weights_cache_time', None) or {}
+
+        if cache_key in cache and cache_key in cache_time and (now - cache_time[cache_key]) < 300:
+            return cache[cache_key]
 
         try:
             conn = sqlite3.connect(self.db_path, timeout=10)
             conn.row_factory = sqlite3.Row
             cursor = conn.cursor()
+
+            # 先尝试按league_id查找
+            if league_id:
+                try:
+                    cursor.execute("SELECT * FROM model_weights WHERE is_active = 1 AND league_id = ? LIMIT 1", (league_id,))
+                    row = cursor.fetchone()
+                    if row:
+                        weights = self._extract_weights_from_row(row)
+                        cache[cache_key] = weights
+                        cache_time[cache_key] = now
+                        self._model_weights_cache = cache
+                        self._model_weights_cache_time = cache_time
+                        conn.close()
+                        return weights
+                except Exception:
+                    pass  # league_id列可能不存在
+
+            # 全局权重(league_id IS NULL或无league_id列)
             cursor.execute("SELECT * FROM model_weights WHERE is_active = 1 LIMIT 1")
             row = cursor.fetchone()
             conn.close()
 
             if row:
-                self._model_weights_cache = {
-                    'elo': row['elo_weight'],
-                    'poisson': row['poisson_weight'],
-                    'h2h': row['h2h_weight'],
-                    'form': row['form_weight'],
-                    'home_away': row['home_away_weight'],
-                    'motivation': row['motivation_weight'],
-                    'news_factors': row['news_factors_weight'],
-                }
-                self._model_weights_cache_time = now
-                return self._model_weights_cache
+                weights = self._extract_weights_from_row(row)
+                cache[cache_key] = weights
+                cache_time[cache_key] = now
+                self._model_weights_cache = cache
+                self._model_weights_cache_time = cache_time
+                return weights
         except Exception:
             pass
 
         return {}
+
+    def _extract_weights_from_row(self, row) -> Dict:
+        """从model_weights行提取7因子权重dict"""
+        return {
+            'elo': row['elo_weight'],
+            'poisson': row['poisson_weight'],
+            'h2h': row['h2h_weight'],
+            'form': row['form_weight'],
+            'home_away': row['home_away_weight'],
+            'motivation': row['motivation_weight'],
+            'news_factors': row['news_factors_weight'],
+        }
 
     def _load_odds_movement(self, home_team_id, away_team_id, match_date, conn) -> list:
         """从intel报告加载该比赛的赔率异动信号"""
@@ -769,10 +808,15 @@ class ComprehensiveAnalyzer:
         weights: Dict = None
     ) -> Dict:
         """
-        计算最终预测（加权融合）
+        计算最终预测（3路对数线性融合: elo + poisson + adjusted）
+
+        使用log-linear而非线性加权:
+        - 概率不能直接线性组合(不满足概率公理)
+        - log-linear: log(p_final) = sum(w_i * log(p_i)), 再exp归一化
+        - 当所有因子一致时结果与线性相同, 分歧时强化共识方向
         """
         if weights is None:
-            weights = self.DEFAULT_WEIGHTS
+            weights = self.DEFAULT_WEIGHTS_7
 
         # Elo预测概率
         elo_probs = elo_prediction['predictions']
@@ -784,48 +828,38 @@ class ComprehensiveAnalyzer:
         adjusted_probs = adjusted_prediction['probabilities']
 
         elo_weight = weights.get('elo', 0.20)
-        poisson_weight = weights.get('poisson', 0.25)
-        adjusted_weight = weights.get('adjusted', 1 - elo_weight - poisson_weight)
+        poisson_weight = weights.get('poisson', 0.20)
+        adjusted_weight = 1.0 - elo_weight - poisson_weight
 
-        final_home_win = (
-            elo_probs['home_win'] * elo_weight +
-            poisson_probs['home_win'] * poisson_weight +
-            adjusted_probs['home_win'] * adjusted_weight
-        )
+        # Log-linear fusion
+        outcomes = ['home_win', 'draw', 'away_win']
+        factor_probs = [
+            (elo_probs, elo_weight),
+            (poisson_probs, poisson_weight),
+            (adjusted_probs, adjusted_weight),
+        ]
 
-        final_draw = (
-            elo_probs['draw'] * elo_weight +
-            poisson_probs['draw'] * poisson_weight +
-            adjusted_probs['draw'] * adjusted_weight
-        )
+        final = {}
+        for outcome in outcomes:
+            log_sum = 0.0
+            for probs, w in factor_probs:
+                p = max(probs.get(outcome, 0.01), 0.01)  # clamp to avoid log(0)
+                log_sum += w * math.log(p)
+            final[outcome] = math.exp(log_sum)
 
-        final_away_win = (
-            elo_probs['away_win'] * elo_weight +
-            poisson_probs['away_win'] * poisson_weight +
-            adjusted_probs['away_win'] * adjusted_weight
-        )
+        # Normalize
+        total = sum(final.values())
+        if total > 0:
+            final = {k: v / total for k, v in final.items()}
 
-        # 裁剪到合法范围(防止负概率)
-        final_home_win = max(0.01, final_home_win)
-        final_draw = max(0.01, final_draw)
-        final_away_win = max(0.01, final_away_win)
-
-        # 标准化
-        total = final_home_win + final_draw + final_away_win
-        final_home_win /= total
-        final_draw /= total
-        final_away_win /= total
+        # Clip to valid range
+        final = {k: max(0.01, v) for k, v in final.items()}
+        total = sum(final.values())
+        final = {k: v / total for k, v in final.items()}
 
         # 确定预测结果
-        if final_home_win > final_away_win and final_home_win > final_draw:
-            predicted_result = 'home_win'
-            confidence = final_home_win
-        elif final_away_win > final_home_win and final_away_win > final_draw:
-            predicted_result = 'away_win'
-            confidence = final_away_win
-        else:
-            predicted_result = 'draw'
-            confidence = final_draw
+        predicted_result = max(final, key=final.get)
+        confidence = final[predicted_result]
 
         # 置信度等级
         if confidence >= 0.6:
@@ -837,9 +871,9 @@ class ComprehensiveAnalyzer:
 
         return {
             'probabilities': {
-                'home_win': round(final_home_win, 4),
-                'draw': round(final_draw, 4),
-                'away_win': round(final_away_win, 4)
+                'home_win': round(final['home_win'], 4),
+                'draw': round(final['draw'], 4),
+                'away_win': round(final['away_win'], 4)
             },
             'predicted_result': predicted_result,
             'confidence': round(confidence, 4),
@@ -1032,7 +1066,7 @@ class ComprehensiveAnalyzer:
 
         # 仅使用Elo和Poisson
         elo_prediction = self.elo.calculate_match_elo_prediction(home_team_id, away_team_id, conn)
-        poisson_prediction = self.poisson.predict_match(home_team_id, away_team_id, conn=conn)
+        poisson_prediction = self.poisson.predict_match(home_team_id, away_team_id, conn=conn, is_neutral_venue=False)
 
         # 简单加权
         elo_weight = 0.3

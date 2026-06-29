@@ -65,19 +65,12 @@
       <!-- 内容区 -->
       <div class="content-area">
         <!-- 路由视图 - 用于详情页面 -->
-        <router-view v-if="$route.path.startsWith('/match/') || $route.path.startsWith('/team/') || $route.path.startsWith('/league/') || $route.path.startsWith('/analysis/')"></router-view>
+        <router-view v-if="$route.path.startsWith('/match/') || $route.path.startsWith('/team/') || $route.path.startsWith('/league/')"></router-view>
 
         <!-- 主页面组件切换 -->
-        <HomePanel v-else-if="currentPage === '首页'" />
-        <DailyCycle v-else-if="currentPage === '日循环'" />
-        <MatchPreview v-else-if="currentPage === '赛事前瞻'" />
-        <DataView v-else-if="currentPage === '数据查看'" />
-        <AnalysisCenter v-else-if="currentPage === '分析中心'" />
         <LotteryCenter v-else-if="currentPage === '体彩中心'" />
         <DataCenter v-else-if="currentPage === '数据中心'" />
-        <Favorites v-else-if="currentPage === '我的收藏'" />
-        <Calendar v-else-if="currentPage === '比赛日历'" />
-        <Teams v-else-if="currentPage === '球队库'" />
+        <DataView v-else-if="currentPage === '数据查看'" />
         <Settings v-else-if="currentPage === '设置'" />
 
         <!-- 开发中的页面 -->
@@ -93,15 +86,8 @@
 <script>
 import { ref, h, defineComponent, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import MatchPreview from './components/MatchPreview.vue'
 import DataView from './components/DataView.vue'
-import AnalysisCenter from './components/AnalysisCenter.vue'
-import Favorites from './components/Favorites.vue'
-import Calendar from './components/Calendar.vue'
-import Teams from './components/Teams.vue'
 import Settings from './components/Settings.vue'
-import HomePanel from './components/HomePanel.vue'
-import DailyCycle from './components/DailyCycle.vue'
 import DataCenter from './components/DataCenter.vue'
 import LotteryCenter from './components/LotteryCenter.vue'
 
@@ -194,15 +180,8 @@ const CloseIcon = createIcon('CloseIcon', 'w-3.5 h-3.5', [
 export default {
   name: 'App',
   components: {
-    MatchPreview,
     DataView,
-    AnalysisCenter,
-    Favorites,
-    Calendar,
-    Teams,
     Settings,
-    HomePanel,
-    DailyCycle,
     DataCenter,
     LotteryCenter,
     HomeIcon,
@@ -228,16 +207,9 @@ export default {
     const syncStatus = ref(null)
 
     const navItems = [
-      { icon: 'HomeIcon', label: '首页' },
-      { icon: 'ActivityIcon', label: '日循环' },
-      { icon: 'ActivityIcon', label: '赛事前瞻' },
       { icon: 'LotteryIcon', label: '体彩中心' },
-      { icon: 'DatabaseIcon', label: '数据查看' },
-      { icon: 'BarChartIcon', label: '分析中心' },
       { icon: 'DatabaseIcon', label: '数据中心' },
-      { icon: 'StarIcon', label: '我的收藏' },
-      { icon: 'CalendarIcon', label: '比赛日历' },
-      { icon: 'UsersIcon', label: '球队库' },
+      { icon: 'DatabaseIcon', label: '数据查看' },
       { icon: 'SettingsIcon', label: '设置' }
     ]
 
@@ -271,7 +243,10 @@ export default {
 
     const handleSearch = () => {
       if (searchQuery.value.trim()) {
-        router.push({ name: 'Analysis', query: { q: searchQuery.value } })
+        currentPage.value = '数据查看'
+        if (router.currentRoute.value.path !== '/') {
+          router.push('/')
+        }
       }
     }
 

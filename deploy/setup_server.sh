@@ -6,7 +6,8 @@ apt update
 apt install -y python3-pip python3-venv nginx git curl logrotate
 
 echo "[2/7] 创建项目目录..."
-mkdir -p /opt/football_tools/{data,logs,config,backups,frontend/dist}
+mkdir -p /opt/football_tools/{data,logs,config,frontend/dist}
+mkdir -p /opt/football_backups
 
 echo "[3/7] 创建Python虚拟环境..."
 python3 -m venv /opt/football_tools/venv

@@ -118,7 +118,7 @@ def format_daily_push(date: str, mode: str, predictions: list,
                     lines.append(f'  让球(让{rq_hc:+.1f}): {rq_dir} 主{rq_probs.get("3", 0):.0%} 平{rq_probs.get("1", 0):.0%} 客{rq_probs.get("0", 0):.0%}')
 
             # 大小球
-            ou = pp.get('over_under', {})
+            ou = pp.get('ou') or pp.get('over_under', {})
             if ou and ou.get('recommendation'):
                 lines.append(f'  大小球: {ou.get("recommendation", "?")} (大2.5={ou.get("over_2_5", 0):.0%})')
 
