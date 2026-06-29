@@ -1419,10 +1419,11 @@ def _compute_model_vs_odds(model_probs: Dict, odds_baseline: Dict) -> Dict:
 
 
 def _apply_disagreement_boost(result: dict):
-    """模型-赔率分歧增强
+    """模型-赔率分歧处理
 
-    当模型argmax与赔率argmax不一致时, 历史数据显示模型75%正确.
-    策略: 提升模型预测方向的概率, 提升幅度与模型概率成正比.
+    数据回测(76场): 模型与赔率一致时70%准确, 分歧时模型仅38.5%而赔率50%.
+    策略: 不再boost模型方向, 而是将概率向赔率方向靠拢(blend 30%赔率).
+    如果模型方向概率显著高于赔率(>=0.40且>赔率+5pp), 保留模型方向但降置信度.
     """
     mvo = result.get('model_vs_odds')
     if not mvo or mvo.get('agreement') is not False:
@@ -1434,55 +1435,74 @@ def _apply_disagreement_boost(result: dict):
         return
 
     model_rec = mvo.get('model_rec', '')
-    if not model_rec:
+    odds_rec = mvo.get('odds_rec', '')
+    if not model_rec or not odds_rec:
         return
 
-    # Map model_rec to probability key
     key_map = {'home_win': 'home_win', 'draw': 'draw', 'away_win': 'away_win'}
     model_key = key_map.get(model_rec, model_rec)
+    odds_key = key_map.get(odds_rec, odds_rec)
     model_prob = probs.get(model_key, 0)
 
     if _apply_spf_market_anchor(result, probs, model_key, model_prob):
         return
 
-    if model_prob < 0.30:
-        return  # Model isn't confident enough to boost
+    # Blend towards market: 30% market weight when disagreeing
+    odds_baseline = result.get('odds_baseline') if isinstance(result.get('odds_baseline'), dict) else {}
+    market_probs = {
+        k: _to_float(odds_baseline.get(k), 0.0) or 0.0
+        for k in ('home_win', 'draw', 'away_win')
+    }
+    market_total = sum(market_probs.values())
+    if market_total <= 0:
+        return
+    market_probs = {k: v / market_total for k, v in market_probs.items()}
 
-    # Boost: increase model direction by 15% of the gap to 1.0
-    # E.g. if model says home_win=0.45, boost to 0.45 + 0.15*(1-0.45) = 0.5325
-    boost_factor = 0.15
-    gap = 1.0 - model_prob
-    boost = gap * boost_factor
+    # If model is very confident (>=0.40 AND > market+5pp), keep model but lower confidence
+    market_model_dir_prob = market_probs.get(model_key, 0)
+    if model_prob >= 0.40 and model_prob > market_model_dir_prob + 0.05:
+        # Model has conviction — keep direction but reduce confidence
+        if fp.get('confidence_level') == 'high':
+            fp['confidence_level'] = 'medium'
+        elif fp.get('confidence_level') == 'medium':
+            fp['confidence_level'] = 'low'
+        mvo['disagreement_handling'] = {
+            'action': 'keep_model_lower_confidence',
+            'model_key': model_key,
+            'model_prob': round(model_prob, 3),
+            'market_prob': round(market_model_dir_prob, 3),
+        }
+        return
 
-    # Apply boost to model direction, reduce others proportionally
-    new_model_prob = model_prob + boost
-    reduction = boost
-    other_keys = [k for k in probs if k != model_key]
-    other_total = sum(probs.get(k, 0) for k in other_keys)
-
-    probs[model_key] = round(new_model_prob, 4)
-    if other_total > 0:
-        for k in other_keys:
-            probs[k] = round(max(probs[k] - reduction * (probs[k] / other_total), 0.05), 4)
-
-    # Renormalize
-    total = sum(probs.values())
+    # Default: blend 30% market into model probabilities
+    blend_weight = 0.30
+    before = {k: _to_float(probs.get(k), 0.0) or 0.0 for k in ('home_win', 'draw', 'away_win')}
+    after = {
+        k: before.get(k, 0) * (1 - blend_weight) + market_probs.get(k, 0) * blend_weight
+        for k in ('home_win', 'draw', 'away_win')
+    }
+    total = sum(after.values())
     if total > 0:
-        for k in probs:
-            probs[k] = round(probs[k] / total, 4)
+        after = {k: round(v / total, 4) for k, v in after.items()}
 
-    # Update confidence
-    if fp.get('confidence_level') == 'medium':
-        fp['confidence_level'] = 'high'
-    elif fp.get('confidence_level') == 'low':
-        fp['confidence_level'] = 'medium'
+    probs.clear()
+    probs.update(after)
+    fp['probabilities'] = probs
+    fp['predicted_result'] = max(after, key=after.get)
+    fp['confidence'] = round(max(after.values()), 4)
+    fp['confidence_level'] = _confidence_level_from_probability(fp['confidence'])
 
-    # Mark that boost was applied
-    mvo['disagreement_boost'] = {
-        'boosted_key': model_key,
-        'original_prob': round(model_prob, 3),
-        'boosted_prob': probs[model_key],
-        'boost_amount': round(boost, 3),
+    # Refresh model_vs_odds
+    refreshed = _compute_model_vs_odds(after, odds_baseline)
+    result['model_vs_odds'] = refreshed
+
+    mvo['disagreement_handling'] = {
+        'action': 'blend_towards_market',
+        'blend_weight': blend_weight,
+        'model_key_before': model_key,
+        'odds_key': odds_key,
+        'before_probabilities': {k: round(before.get(k, 0), 3) for k in ('home_win', 'draw', 'away_win')},
+        'after_probabilities': after,
     }
 
 
@@ -1525,9 +1545,9 @@ def _apply_spf_market_anchor(result: dict, probs: dict, model_key: str, model_pr
     model_values = sorted((_to_float(probs.get(key), 0.0) or 0.0 for key in prob_keys), reverse=True)
     model_gap = model_values[0] - model_values[1] if len(model_values) > 1 else model_values[0]
 
-    if market_top < _env_float('FOOTBALL_SPF_MARKET_ANCHOR_MIN', 0.69, 0.0, 1.0):
+    if market_top < _env_float('FOOTBALL_SPF_MARKET_ANCHOR_MIN', 0.55, 0.0, 1.0):
         return False
-    if market_gap < _env_float('FOOTBALL_SPF_MARKET_ANCHOR_GAP', 0.20, 0.0, 1.0):
+    if market_gap < _env_float('FOOTBALL_SPF_MARKET_ANCHOR_GAP', 0.12, 0.0, 1.0):
         return False
     if model_prob > _env_float('FOOTBALL_SPF_MARKET_ANCHOR_MAX_MODEL_PROB', 0.52, 0.0, 1.0):
         return False
