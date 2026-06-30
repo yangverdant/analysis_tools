@@ -62,6 +62,8 @@ def _source_health_detail(conn) -> Dict[str, Dict]:
             "apifootball_match_detail": "apifootball",
             "api_sports_injuries": "api_sports",
             "bifen188_lineups": "bifen188",
+            "espn_match_summary": "espn_api",
+            "football_data_org_squad": "football_data_org",
             "weather_fetcher": "wttr_in",
             "fifa_ranking_fetcher": "fifa_ranking",
         }
@@ -406,6 +408,17 @@ def _collect_injuries_impl(conn, job: Dict[str, Any], network: bool = True) -> A
             payload["gaps"].append("apifootball ids are available but are not reused for api-sports injuries")
 
     api_hit = bool(payload["api_sports"]["home"] or payload["api_sports"]["away"])
+
+    # ESPN injuries — free API, works during active season
+    espn_hit = False
+    if network:
+        try:
+            espn_injuries = _fetch_espn_injuries(job)
+            payload["espn"] = espn_injuries
+            espn_hit = bool(espn_injuries and (espn_injuries.get("home") or espn_injuries.get("away")))
+        except Exception as exc:
+            payload["espn"] = {"error": str(exc)}
+
     local_hit = _has_local_absence_evidence(
         payload["local_player_status"],
         payload["local_injury_news"],
@@ -415,6 +428,9 @@ def _collect_injuries_impl(conn, job: Dict[str, Any], network: bool = True) -> A
     if api_hit:
         status = RequirementStatus.collected
         confidence = 0.78
+    elif espn_hit:
+        status = RequirementStatus.collected
+        confidence = 0.70
     elif local_hit:
         status = RequirementStatus.fallback_used
         confidence = 0.55
@@ -423,7 +439,7 @@ def _collect_injuries_impl(conn, job: Dict[str, Any], network: bool = True) -> A
         confidence = 0.28
     return ArtifactCreate(
         requirement_key="injuries_suspensions",
-        source="api_sports+local_status+local_news",
+        source="api_sports+espn+local_status+local_news",
         payload=payload,
         confidence=confidence,
         status=status,
@@ -475,6 +491,28 @@ def _collect_expected_lineup_impl(conn, job: Dict[str, Any], network: bool = Tru
         errors.append("Network disabled; apifootball lineup collector skipped.")
     else:
         errors.append("No external API match id mapped; lineup requires match-level external id.")
+
+    # ESPN match summary API — provides lineups for completed matches (free, no auth)
+    espn_lineup = None
+    if network:
+        espn_lineup = _fetch_espn_match_lineup(conn, job)
+        if espn_lineup and espn_lineup.get("has_lineup"):
+            tier_name, tier_label = _lineup_tier(0.82)
+            return ArtifactCreate(
+                requirement_key="expected_lineup",
+                source="espn_match_summary",
+                payload={
+                    "mode": "espn_post_match_lineup",
+                    "lineup": espn_lineup,
+                    "lineup_confidence_tier": tier_name,
+                    "lineup_confidence_label": tier_label,
+                    "gaps": errors + ["ESPN provides post-match lineups only; not pre-match predictions"],
+                },
+                confidence=0.82,
+                status=RequirementStatus.collected,
+            )
+        if espn_lineup and espn_lineup.get("error"):
+            errors.append(f"ESPN lineup: {espn_lineup['error']}")
 
     legacy_lineup = None
     if network:
@@ -601,6 +639,161 @@ def _fetch_legacy_expected_lineup(job: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as exc:
         result["errors"].append({"source": "legacy_prematch_crawler", "error": str(exc)})
     return result
+
+
+_ESPN_LINEUP_CACHE: Dict[str, Any] = {}
+
+
+def _fetch_espn_match_lineup(conn, job: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Fetch match lineup from ESPN summary API.
+
+    Works for completed matches (returns full starting XI + subs + formation).
+    Returns empty rosters for scheduled matches (ESPN doesn't predict lineups).
+    Also persists lineup to match_lineups table for future projections.
+    """
+    home_team = str(job.get("home_team") or "").strip()
+    away_team = str(job.get("away_team") or "").strip()
+    if not home_team or not away_team:
+        return None
+
+    # Check cache
+    cache_key = f"{home_team}_vs_{away_team}"
+    if cache_key in _ESPN_LINEUP_CACHE:
+        cached = _ESPN_LINEUP_CACHE[cache_key]
+        if time.time() - cached.get("_ts", 0) < 600:
+            return {k: v for k, v in cached.items() if k != "_ts"}
+
+    # Determine ESPN league code from match league
+    league = str(job.get("league") or "").strip()
+    from fetchers.espn.get_lineups import resolve_league_code, get_league_scoreboard, get_match_lineup
+
+    espn_league = resolve_league_code(league)
+
+    result = {"home": {}, "away": {}, "has_lineup": False, "source": "espn_api"}
+
+    # Strategy: search for the match in the league scoreboard, then get its lineup
+    leagues_to_search = [espn_league] if espn_league else []
+    # Add common leagues as fallback
+    if espn_league != "eng.1":
+        leagues_to_search.append("eng.1")
+
+    for lg_code in leagues_to_search:
+        if not lg_code:
+            continue
+        try:
+            sb = get_league_scoreboard(lg_code)
+            events = sb.get("events", [])
+            for ev in events:
+                ev_home = ev.get("home_team", "")
+                ev_away = ev.get("away_team", "")
+                if _team_name_match(home_team, ev_home) and _team_name_match(away_team, ev_away):
+                    eid = ev.get("event_id")
+                    if eid:
+                        lineup = get_match_lineup(str(eid), lg_code)
+                        result.update(lineup)
+                        result["espn_event_id"] = eid
+                        result["espn_league"] = lg_code
+                        # Persist to match_lineups for future projections
+                        if lineup.get("has_lineup"):
+                            _persist_espn_lineup(conn, job, lineup)
+                        # Cache result
+                        result["_ts"] = time.time()
+                        _ESPN_LINEUP_CACHE[cache_key] = dict(result)
+                        return {k: v for k, v in result.items() if k != "_ts"}
+        except Exception as exc:
+            result["error"] = str(exc)
+            continue
+        break  # Found in first league, stop searching
+
+    return result if result.get("error") else None
+
+
+def _persist_espn_lineup(conn, job: Dict[str, Any], lineup: Dict[str, Any]) -> None:
+    """Write ESPN lineup data to match_lineups table for future projections."""
+    match_id = job.get("match_id")
+    if not match_id or not _table_exists(conn, "match_lineups"):
+        return
+    try:
+        # Check if lineup already exists for this match
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM match_lineups WHERE match_id = ?",
+            (str(match_id),),
+        ).fetchone()[0]
+        if existing > 0:
+            return  # Already have lineup data
+
+        for side in ("home", "away"):
+            side_data = lineup.get(side, {})
+            team_type = side
+            team_name = side_data.get("team_name", "")
+            formation = side_data.get("formation", "")
+            if isinstance(formation, dict):
+                formation = str(formation)
+
+            for p in side_data.get("starters", []):
+                conn.execute(
+                    """INSERT OR IGNORE INTO match_lineups
+                       (match_id, team_type, player_key, player_name, player_number,
+                        position, is_starter, formation, source)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'espn_api')""",
+                    (str(match_id), team_type, p.get("name", ""), p.get("name", ""),
+                     p.get("jersey"), p.get("position", ""), 1, formation),
+                )
+            for p in side_data.get("subs", []):
+                conn.execute(
+                    """INSERT OR IGNORE INTO match_lineups
+                       (match_id, team_type, player_key, player_name, player_number,
+                        position, is_starter, formation, source)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'espn_api')""",
+                    (str(match_id), team_type, p.get("name", ""), p.get("name", ""),
+                     p.get("jersey"), p.get("position", ""), 0, formation),
+                )
+        conn.commit()
+    except Exception:
+        pass  # Best-effort persistence
+
+
+_ESPN_INJURY_CACHE: Dict[str, Any] = {}
+
+
+def _fetch_espn_injuries(job: Dict[str, Any]) -> Dict[str, Any]:
+    """Fetch injury data from ESPN API (free, no auth).
+
+    Works during active season. Returns empty lists during off-season.
+    """
+    league = str(job.get("league") or "").strip()
+    from fetchers.espn.get_lineups import resolve_league_code, get_league_injuries
+
+    espn_league = resolve_league_code(league)
+    if not espn_league:
+        return {"home": [], "away": [], "error": f"cannot resolve ESPN league for '{league}'"}
+
+    # Cache by league (injury list is per-league, refreshed infrequently)
+    cache_key = espn_league
+    if cache_key in _ESPN_INJURY_CACHE:
+        cached = _ESPN_INJURY_CACHE[cache_key]
+        if time.time() - cached.get("_ts", 0) < 1800:  # 30-min cache
+            return {k: v for k, v in cached.items() if k != "_ts"}
+
+    result = {"home": [], "away": [], "league_code": espn_league, "source": "espn_api"}
+    try:
+        data = get_league_injuries(espn_league)
+        all_injuries = data.get("injuries", [])
+        # Split by home/away team
+        home_team = str(job.get("home_team") or "").strip()
+        away_team = str(job.get("away_team") or "").strip()
+        for inj in all_injuries:
+            team_name = inj.get("team_name", "")
+            if _team_name_match(home_team, team_name):
+                result["home"].append(inj)
+            elif _team_name_match(away_team, team_name):
+                result["away"].append(inj)
+    except Exception as exc:
+        result["error"] = str(exc)
+
+    result["_ts"] = time.time()
+    _ESPN_INJURY_CACHE[cache_key] = dict(result)
+    return {k: v for k, v in result.items() if k != "_ts"}
 
 
 def _fetch_football_data_squad_context(conn, job: Dict[str, Any], network: bool = True) -> Dict[str, Any]:

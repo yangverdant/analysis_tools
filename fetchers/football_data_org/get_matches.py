@@ -249,16 +249,35 @@ def get_scorers(league: str, season: str = None, limit: int = 100) -> List[Dict]
     return scorers
 
 
-def get_team_detail(team_id: str) -> Dict:
+def get_team_detail(team_id: str, season: str = None) -> Dict:
     """获取球队详情 (含阵容)
+
+    Args:
+        team_id: football-data.org team ID
+        season: season start year (e.g., "2025"). If squad is empty without season,
+                try with current season to get squad data.
 
     Returns:
         {"team_id", "name", "short_name", "tla", "country", "founded",
          "venue", "crest", "squad", "source"}
     """
-    data = _request(f"teams/{team_id}")
+    params = {}
+    if season:
+        params["season"] = int(season[:4])
+    data = _request(f"teams/{team_id}", params if params else None)
     if not data:
         return {}
+
+    # If no squad returned and no season specified, retry with current season
+    squad_raw = data.get("squad", [])
+    if not squad_raw and not season:
+        import time as _time
+        from datetime import date
+        _time.sleep(7)  # Respect rate limit (10 req/min on free tier)
+        current_year = str(date.today().year)
+        retry_data = _request(f"teams/{team_id}", {"season": int(current_year)})
+        if retry_data and retry_data.get("squad"):
+            data = retry_data
 
     result = {
         'team_id': str(data.get("id", "")),

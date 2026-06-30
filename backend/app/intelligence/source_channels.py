@@ -102,6 +102,15 @@ SOURCE_CHANNELS: tuple[SourceChannel, ...] = (
         notes="API-Football detail/lineup path when external match ids are mapped.",
     ),
     SourceChannel(
+        name="espn_match_summary",
+        requirement_keys=("expected_lineup", "injuries_suspensions"),
+        kind="fetcher",
+        command="fetchers/espn/get_lineups.py",
+        evidence_tables=("intelligence_artifacts",),
+        priority=35,
+        notes="ESPN free API: post-match lineups (starters+subs+formation) + league injuries. No auth needed.",
+    ),
+    SourceChannel(
         name="football_data_org_squad",
         requirement_keys=("expected_lineup",),
         kind="fetcher",
