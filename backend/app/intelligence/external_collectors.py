@@ -677,6 +677,10 @@ def _fetch_espn_match_lineup(conn, job: Dict[str, Any]) -> Optional[Dict[str, An
     if not home_team or not away_team:
         return None
 
+    # Resolve English team names from DB for ESPN matching
+    home_en = _team_en_name(conn, job.get("home_team_id")) or home_team
+    away_en = _team_en_name(conn, job.get("away_team_id")) or away_team
+
     # Check cache
     cache_key = f"{home_team}_vs_{away_team}"
     if cache_key in _ESPN_LINEUP_CACHE:
@@ -707,7 +711,10 @@ def _fetch_espn_match_lineup(conn, job: Dict[str, Any]) -> Optional[Dict[str, An
             for ev in events:
                 ev_home = ev.get("home_team", "")
                 ev_away = ev.get("away_team", "")
-                if _team_name_match(home_team, ev_home) and _team_name_match(away_team, ev_away):
+                # Match using both CN and EN names
+                home_match = _team_name_match(home_team, ev_home) or _team_name_match(home_en, ev_home)
+                away_match = _team_name_match(away_team, ev_away) or _team_name_match(away_en, ev_away)
+                if home_match and away_match:
                     eid = ev.get("event_id")
                     if eid:
                         lineup = get_match_lineup(str(eid), lg_code)
@@ -728,9 +735,9 @@ def _fetch_espn_match_lineup(conn, job: Dict[str, Any]) -> Optional[Dict[str, An
 
     # If no lineup found for this specific match (scheduled/upcoming),
     # try finding each team's most recent lineup from completed matches
-    if not result.get("has_lineup") and network:
+    if not result.get("has_lineup"):
         from fetchers.espn.get_lineups import find_team_recent_lineup
-        for side, team_name in [("home", home_team), ("away", away_team)]:
+        for side, team_name in [("home", home_en), ("away", away_en)]:
             try:
                 recent = find_team_recent_lineup(team_name)
                 if recent.get("lineup", {}).get("starters"):
@@ -1054,6 +1061,22 @@ def _record_source_artifact(
         )
     except Exception:
         return
+
+
+def _team_en_name(conn, team_id: Optional[int]) -> str:
+    """Resolve English team name from teams table for ESPN matching."""
+    if not team_id or not _table_exists(conn, "teams"):
+        return ""
+    try:
+        row = conn.execute(
+            "SELECT name_en, oddsfe_name_en FROM teams WHERE team_id = ?",
+            (int(team_id),),
+        ).fetchone()
+        if row:
+            return row[0] or row[1] or ""
+    except Exception:
+        pass
+    return ""
 
 
 def _team_name_match(expected: str, observed: str) -> bool:
