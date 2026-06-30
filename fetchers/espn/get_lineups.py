@@ -44,6 +44,7 @@ LEAGUE_CODES = {
     "英冠": "eng.2", "championship": "eng.2",
     "欧冠": "uefa.champions", "champions_league": "uefa.champions",
     "欧联": "uefa.europa", "europa_league": "uefa.europa",
+    "世界杯": "fifa.world", "world_cup": "fifa.world",
     "中超": "chn.1", "chinese_super_league": "chn.1",
     "J联赛": "jpn.1", "j_league": "jpn.1",
     "K联赛": "kor.1", "k_league": "kor.1",

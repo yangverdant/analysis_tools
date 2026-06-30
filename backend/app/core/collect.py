@@ -49,6 +49,9 @@ def collect(state, db_path: str) -> dict:
     # Step 5: 更新已过开赛时间的比赛状态
     results['status_update'] = _update_match_status(db_path)
 
+    # Step 6: 刷新player_status(伤病/阵容)
+    results['player_status'] = _refresh_player_status(db_path)
+
     logger.info('采集完成: %d场入库, %d赔率入库',
                 results['sync'].get('saved', 0),
                 results['odds'].get('saved', 0))
@@ -401,6 +404,122 @@ def _update_match_status(db_path: str) -> dict:
     except Exception as e:
         logger.warning('状态更新失败: %s', e)
         return {'closed': 0, 'finished': 0, 'error': str(e)}
+
+
+def _refresh_player_status(db_path: str) -> dict:
+    """Refresh player_status from ESPN injuries (active leagues only).
+
+    Only fetches when there are upcoming matches within 48h.
+    Runs at most once per 12h (tracked in data_source_health).
+    """
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+
+        # Check if we ran recently
+        row = conn.execute(
+            "SELECT last_success FROM data_source_health WHERE source_name = 'player_status_refresh'"
+        ).fetchone()
+        if row and row[0]:
+            from datetime import timedelta
+            last = datetime.fromisoformat(row[0]) if isinstance(row[0], str) else row[0]
+            if datetime.now() - last < timedelta(hours=12):
+                conn.close()
+                return {'skipped': True, 'reason': 'ran_within_12h'}
+
+        # Check for upcoming matches
+        today = date.today().isoformat()
+        upcoming = conn.execute(
+            "SELECT COUNT(*) FROM lottery_matches WHERE match_date >= ?", (today,)
+        ).fetchone()[0]
+        if upcoming == 0:
+            conn.close()
+            return {'skipped': True, 'reason': 'no_upcoming_matches'}
+
+        # Fetch ESPN injuries for active leagues
+        total_injuries = 0
+        active_leagues = ['eng.1', 'esp.1', 'ger.1', 'ita.1', 'fra.1',
+                          'uefa.champions', 'uefa.europa', 'fifa.world',
+                          'usa.1', 'bra.1']
+
+        from fetchers.espn.get_lineups import get_league_injuries
+
+        for lg_code in active_leagues:
+            try:
+                data = get_league_injuries(lg_code)
+                injuries = data.get('injuries', [])
+                for inj in injuries:
+                    team_name = inj.get('team_name', '')
+                    player_name = inj.get('athlete_name', '')
+                    injury_type = inj.get('injury_type', '')
+                    status = inj.get('status', '')
+
+                    if not player_name or not team_name:
+                        continue
+
+                    status_map = {
+                        'Out': 'injured', 'Doubtful': 'doubtful',
+                        'Questionable': 'doubtful', 'Probable': 'available',
+                        'Day To Day': 'doubtful',
+                    }
+                    mapped = status_map.get(status, 'injured' if 'out' in status.lower() else 'doubtful')
+
+                    # Find team_id
+                    team_id = _find_team_id(conn, team_name)
+                    if not team_id:
+                        continue
+
+                    conn.execute(
+                        """INSERT INTO player_status (player_name, team_id, status, status_detail,
+                                                      injury_type, source, updated_at)
+                           VALUES (?, ?, ?, ?, ?, 'espn_api', ?)
+                           ON CONFLICT(player_name, team_id) DO UPDATE SET
+                               status = excluded.status, status_detail = excluded.status_detail,
+                               injury_type = excluded.injury_type, source = excluded.source,
+                               updated_at = excluded.updated_at""",
+                        (player_name, team_id, mapped, status, injury_type,
+                         datetime.now().isoformat()),
+                    )
+                    total_injuries += 1
+            except Exception:
+                continue
+
+        conn.commit()
+
+        # Update health record
+        conn.execute(
+            """INSERT INTO data_source_health (source_name, last_success, status)
+               VALUES ('player_status_refresh', ?, 'ok')
+               ON CONFLICT(source_name) DO UPDATE SET last_success = excluded.last_success, status = 'ok'""",
+            (datetime.now().isoformat(),),
+        )
+        conn.commit()
+        conn.close()
+
+        logger.info('player_status刷新: %d条伤病更新', total_injuries)
+        return {'injuries': total_injuries}
+
+    except Exception as e:
+        logger.warning('player_status刷新失败: %s', e)
+        return {'error': str(e)}
+
+
+def _find_team_id(conn, team_name: str) -> int:
+    """Find internal team_id from team name."""
+    try:
+        row = conn.execute(
+            "SELECT team_id FROM teams WHERE name_en = ? LIMIT 1", (team_name,),
+        ).fetchone()
+        if row:
+            return row[0]
+        row = conn.execute(
+            "SELECT team_id FROM teams WHERE name_en LIKE ? OR name_cn LIKE ? LIMIT 1",
+            (f"%{team_name}%", f"%{team_name}%"),
+        ).fetchone()
+        if row:
+            return row[0]
+    except Exception:
+        pass
+    return None
 
 
 def _resolve_oddsfe_db_path(db_path: str) -> str:
