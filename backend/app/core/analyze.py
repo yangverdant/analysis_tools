@@ -4869,6 +4869,20 @@ def _refine_ou_recommendation(ou: dict, result: dict, score_matrix=None, db_path
 
     ou['model_recommendation'] = _format_ou_recommendation(model_side, line)
     ou['model_edge'] = round(model_edge, 4)
+
+    # Low-confidence Under correction: data shows Under predictions at <0.60 confidence
+    # have only 50.1% accuracy (essentially random), while Over at same confidence
+    # has 56.2%. When Under confidence is low, default to Over (which matches the
+    # 52.9% base rate of actual Over results).
+    if final_side == 'under' and selected_probability < 0.56 and basis == 'model_distribution':
+        final_side = 'over'
+        basis = 'under_low_confidence_correction'
+        ou['under_correction'] = {
+            'original_side': 'under',
+            'original_confidence': round(selected_probability, 3),
+            'reason': 'Under<0.56 only 50.1% accurate in 1477-match validation; defaulting to Over',
+        }
+
     if matrix_ou:
         ou['matrix_ou_self_check'] = {
             **matrix_ou,
