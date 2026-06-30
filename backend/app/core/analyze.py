@@ -6149,13 +6149,6 @@ def _apply_play_consistency(plays: dict) -> None:
         target = spf_target
         target_reason = 'spf_axis'
 
-    if target_reason == 'spf_axis' and not spf_axis_trusted_for_bqc():
-        bqc['consistency_skipped'] = {
-            'reason': 'bqc_axis_threshold_not_met',
-            'current': current,
-            'spf_full_time': spf_target,
-        }
-        return
     if not target or len(current) != 2 or current[1] == target:
         return
 
@@ -9615,23 +9608,28 @@ def _compute_bqc(
             else:
                 full_away += prob
 
-    # BQC = P(半场X) × P(全场Y) × 关联系数
-    # 关联系数: 半场和全场结果正相关, 用经验系数调整
-    corr = 1.5  # 胜胜/负负增强
-    anti_corr = 0.7  # 胜负/负胜削弱
-
-    bqc_raw = {
-        'hh': half_home * full_home * corr,
-        'hd': half_home * full_draw,
-        'ha': half_home * full_away * anti_corr,
-        'dh': half_draw * full_home,
-        'dd': half_draw * full_draw * corr,
-        'da': half_draw * full_away,
-        'ah': half_away * full_home * anti_corr,
-        'ad': half_away * full_draw,
-        'aa': half_away * full_away * corr,
+    # BQC = P(半场X) × P(全场Y|半场X)  (empirical transition matrix)
+    # Empirical P(FT|HT) from 30K matches:
+    #   HT=3(主胜): FT=3 77.6%, FT=1 15.9%, FT=0 6.5%
+    #   HT=1(平局): FT=3 34.9%, FT=1 40.1%, FT=0 25.1%
+    #   HT=0(客胜): FT=3 11.1%, FT=1 20.9%, FT=0 68.0%
+    _EMPIRICAL_TRANSITION = {
+        'h': {'h': 0.776, 'd': 0.159, 'a': 0.065},
+        'd': {'h': 0.349, 'd': 0.401, 'a': 0.251},
+        'a': {'h': 0.111, 'd': 0.209, 'a': 0.680},
     }
-    bqc_method = 'marginal_product'
+    bqc_raw = {
+        'hh': half_home * _EMPIRICAL_TRANSITION['h']['h'],
+        'hd': half_home * _EMPIRICAL_TRANSITION['h']['d'],
+        'ha': half_home * _EMPIRICAL_TRANSITION['h']['a'],
+        'dh': half_draw * _EMPIRICAL_TRANSITION['d']['h'],
+        'dd': half_draw * _EMPIRICAL_TRANSITION['d']['d'],
+        'da': half_draw * _EMPIRICAL_TRANSITION['d']['a'],
+        'ah': half_away * _EMPIRICAL_TRANSITION['a']['h'],
+        'ad': half_away * _EMPIRICAL_TRANSITION['a']['d'],
+        'aa': half_away * _EMPIRICAL_TRANSITION['a']['a'],
+    }
+    bqc_method = 'empirical_transition'
     if _env_float('FOOTBALL_BQC_JOINT_PATH_ENABLED', 0.0, 0.0, 1.0) >= 1.0:
         def result_key(home_goals: int, away_goals: int) -> str:
             if home_goals > away_goals:
@@ -9671,10 +9669,9 @@ def _compute_bqc(
             bqc_probs[k] = round(bqc_raw[k] / total_bqc, 3)
 
     # 推荐：半全场是全场方向的路径推导，先在胜平负主轴内择优。
-    # 低置信主轴也要保持展示一致性；低置信只降低风险等级，不允许全场腿互相打架。
+    # 始终约束到SPF全场方向(数据验证: always-axis=35.8% vs gated-axis=34.2%)
     axis_enabled = _env_float('FOOTBALL_BQC_SPF_AXIS_ENABLED', 1.0, 0.0, 1.0) >= 1.0
-    axis_trusted = _axis_context_is_trusted_for_bqc(axis_context) if axis_context is not None else True
-    axis_target = {'3': 'h', '1': 'd', '0': 'a'}.get(str(full_time_axis or '')) if axis_enabled and axis_trusted else ''
+    axis_target = {'3': 'h', '1': 'd', '0': 'a'}.get(str(full_time_axis or '')) if axis_enabled else ''
     constrained_probs = {
         key: value
         for key, value in bqc_probs.items()
@@ -9810,14 +9807,14 @@ def _compute_bqc(
             'source': 'spf_axis',
             'full_time_axis': axis_target,
             'candidate_count': len(constrained_probs),
-            'trusted': bool(axis_trusted),
+            'trusted': bool(axis_target),
             'axis_context': axis_context or {},
         }
     elif axis_context:
         result['axis_constraint'] = {
             'source': 'spf_axis',
             'applied': False,
-            'reason': 'bqc_axis_disabled' if _env_float('FOOTBALL_BQC_SPF_AXIS_ENABLED', 1.0, 0.0, 1.0) < 1.0 else 'bqc_axis_threshold_not_met',
+            'reason': 'bqc_axis_disabled' if _env_float('FOOTBALL_BQC_SPF_AXIS_ENABLED', 1.0, 0.0, 1.0) < 1.0 else 'no_spf_direction',
             'axis_context': axis_context,
             'min_probability': _env_float('FOOTBALL_BQC_AXIS_MIN_PROBABILITY', 0.52, 0.0, 1.0),
             'min_gap': _env_float('FOOTBALL_BQC_AXIS_MIN_GAP', 0.05, 0.0, 1.0),
