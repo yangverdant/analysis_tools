@@ -2478,15 +2478,18 @@ def _add_injury_delta(artifact: Optional[dict], deltas: Dict[str, float], factor
     # Also check API-confirmed counts
     home_absent += summary.get('api_home_count', 0) or 0
     away_absent += summary.get('api_away_count', 0) or 0
+    # Also check ESPN counts (free API, available during season)
+    home_absent += summary.get('espn_home_count', 0) or 0
+    away_absent += summary.get('espn_away_count', 0) or 0
 
     # Check for key player absences in local_player_status
     local_ps = payload.get('local_player_status') or {}
     home_key = (local_ps.get('summary', {}).get('home') or {}).get('key_absent', 0) or 0
     away_key = (local_ps.get('summary', {}).get('away') or {}).get('key_absent', 0) or 0
 
-    # Confidence scaling: API-confirmed > local_fallback
+    # Confidence scaling: API-confirmed > ESPN-confirmed > local_fallback
     conf = _artifact_confidence(artifact, 0.3)
-    scale = 1.0 if mode == 'api_confirmed' else 0.5
+    scale = 1.0 if mode == 'api_confirmed' else 0.8 if mode == 'espn_confirmed' else 0.5
 
     factor_delta = {k: 0.0 for k in PROB_KEYS}
     evidence = []

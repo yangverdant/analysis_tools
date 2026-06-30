@@ -1423,10 +1423,14 @@ def _injury_summary(payload: Dict[str, Any], api_hit: bool, local_hit: bool) -> 
     local_status = payload.get("local_player_status", {})
     local_news = payload.get("local_injury_news", {})
     live_news = payload.get("live_injury_news", {})
+    espn = payload.get("espn", {})
+    espn_hit = bool(espn and (espn.get("home") or espn.get("away")))
     return {
-        "mode": "api_confirmed" if api_hit else "local_fallback" if local_hit else "no_confirmed_absence_found",
+        "mode": "api_confirmed" if api_hit else "espn_confirmed" if espn_hit else "local_fallback" if local_hit else "no_confirmed_absence_found",
         "api_home_count": len(payload.get("api_sports", {}).get("home", [])),
         "api_away_count": len(payload.get("api_sports", {}).get("away", [])),
+        "espn_home_count": len(espn.get("home", [])) if espn else 0,
+        "espn_away_count": len(espn.get("away", [])) if espn else 0,
         "local_home_absent": len(local_status.get("home", [])),
         "local_away_absent": len(local_status.get("away", [])),
         "local_home_news": len(local_news.get("home", [])),
