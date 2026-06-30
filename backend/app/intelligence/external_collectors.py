@@ -493,24 +493,45 @@ def _collect_expected_lineup_impl(conn, job: Dict[str, Any], network: bool = Tru
         errors.append("No external API match id mapped; lineup requires match-level external id.")
 
     # ESPN match summary API — provides lineups for completed matches (free, no auth)
+    # Also projects lineups from a team's most recent completed match
     espn_lineup = None
     if network:
         espn_lineup = _fetch_espn_match_lineup(conn, job)
         if espn_lineup and espn_lineup.get("has_lineup"):
-            tier_name, tier_label = _lineup_tier(0.82)
-            return ArtifactCreate(
-                requirement_key="expected_lineup",
-                source="espn_match_summary",
-                payload={
-                    "mode": "espn_post_match_lineup",
-                    "lineup": espn_lineup,
-                    "lineup_confidence_tier": tier_name,
-                    "lineup_confidence_label": tier_label,
-                    "gaps": errors + ["ESPN provides post-match lineups only; not pre-match predictions"],
-                },
-                confidence=0.82,
-                status=RequirementStatus.collected,
-            )
+            is_projected = espn_lineup.get("mode") == "projected_from_recent_espn_match"
+            if is_projected:
+                # Projected from recent match — lower confidence but still valuable
+                confidence = 0.60
+                tier_name, tier_label = _lineup_tier(confidence)
+                return ArtifactCreate(
+                    requirement_key="expected_lineup",
+                    source="espn_recent_match_projection",
+                    payload={
+                        "mode": "espn_recent_match_projection",
+                        "lineup": espn_lineup,
+                        "lineup_confidence_tier": tier_name,
+                        "lineup_confidence_label": tier_label,
+                        "gaps": errors + ["Lineup projected from team's most recent ESPN match, not confirmed for this match"],
+                    },
+                    confidence=confidence,
+                    status=RequirementStatus.fallback_used,
+                )
+            else:
+                # Actual lineup from this match (post-match)
+                tier_name, tier_label = _lineup_tier(0.82)
+                return ArtifactCreate(
+                    requirement_key="expected_lineup",
+                    source="espn_match_summary",
+                    payload={
+                        "mode": "espn_post_match_lineup",
+                        "lineup": espn_lineup,
+                        "lineup_confidence_tier": tier_name,
+                        "lineup_confidence_label": tier_label,
+                        "gaps": errors + ["ESPN provides post-match lineups only; not pre-match predictions"],
+                    },
+                    confidence=0.82,
+                    status=RequirementStatus.collected,
+                )
         if espn_lineup and espn_lineup.get("error"):
             errors.append(f"ESPN lineup: {espn_lineup['error']}")
 
@@ -704,6 +725,33 @@ def _fetch_espn_match_lineup(conn, job: Dict[str, Any]) -> Optional[Dict[str, An
             result["error"] = str(exc)
             continue
         break  # Found in first league, stop searching
+
+    # If no lineup found for this specific match (scheduled/upcoming),
+    # try finding each team's most recent lineup from completed matches
+    if not result.get("has_lineup") and network:
+        from fetchers.espn.get_lineups import find_team_recent_lineup
+        for side, team_name in [("home", home_team), ("away", away_team)]:
+            try:
+                recent = find_team_recent_lineup(team_name)
+                if recent.get("lineup", {}).get("starters"):
+                    result[side] = {
+                        "team_name": team_name,
+                        "starters": recent["lineup"]["starters"],
+                        "subs": recent["lineup"].get("subs", []),
+                        "formation": recent["lineup"].get("formation", {}),
+                        "starter_count": len(recent["lineup"]["starters"]),
+                        "sub_count": len(recent["lineup"].get("subs", [])),
+                        "from_recent_match": True,
+                        "recent_match_info": recent.get("match_info", {}),
+                    }
+                    result["has_lineup"] = True
+                    result["mode"] = "projected_from_recent_espn_match"
+            except Exception:
+                continue
+        if result.get("has_lineup"):
+            result["_ts"] = time.time()
+            _ESPN_LINEUP_CACHE[cache_key] = dict(result)
+            return {k: v for k, v in result.items() if k != "_ts"}
 
     return result if result.get("error") else None
 
@@ -1571,6 +1619,24 @@ def _recent_team_lineup(conn, team_id: Optional[int], match_date: Optional[str],
     if not team_id:
         empty["gaps"].append("team_id missing")
         return empty
+
+    # Strategy 1: Try match_lineups table (original path)
+    db_lineup = _recent_team_lineup_from_db(conn, team_id, match_date, limit_matches)
+    if db_lineup.get("latest_starting_xi"):
+        return db_lineup
+
+    # Strategy 2: Try ESPN lineup cache for the team's recent matches
+    espn_lineup = _recent_team_lineup_from_espn_cache(conn, team_id, match_date)
+    if espn_lineup.get("latest_starting_xi"):
+        return espn_lineup
+
+    # Merge gaps from both strategies
+    empty["gaps"] = db_lineup.get("gaps", []) + espn_lineup.get("gaps", [])
+    return empty
+
+
+def _recent_team_lineup_from_db(conn, team_id: Optional[int], match_date: Optional[str], limit_matches: int = 5) -> Dict[str, Any]:
+    empty = {"latest_starting_xi": [], "frequent_starters": [], "sample_matches": [], "gaps": []}
     if not _table_exists(conn, "match_lineups") or not _table_exists(conn, "matches"):
         empty["gaps"].append("match_lineups or matches table missing")
         return empty
@@ -1627,6 +1693,85 @@ def _recent_team_lineup(conn, team_id: Optional[int], match_date: Optional[str],
         "frequent_starters": frequent,
         "sample_matches": sample_matches,
         "projection_note": "Fallback uses recent imported lineups; it is not a confirmed starting XI.",
+    }
+
+
+def _recent_team_lineup_from_espn_cache(conn, team_id: Optional[int], match_date: Optional[str]) -> Dict[str, Any]:
+    """Try to find recent ESPN lineup data from source_artifacts table."""
+    empty = {"latest_starting_xi": [], "frequent_starters": [], "sample_matches": [], "gaps": []}
+    if not _table_exists(conn, "source_artifacts"):
+        empty["gaps"].append("source_artifacts table missing")
+        return empty
+
+    # Try to find team name from teams table
+    team_name = None
+    try:
+        row = conn.execute("SELECT name_cn, name_en FROM teams WHERE team_id = ?", (team_id,)).fetchone()
+        if row:
+            team_name = row[0] or row[1]
+    except Exception:
+        pass
+
+    if not team_name:
+        empty["gaps"].append(f"cannot resolve team name for team_id={team_id}")
+        return empty
+
+    # Look for ESPN lineup artifacts (from _persist_espn_lineup or _record_source_artifact)
+    try:
+        rows = conn.execute(
+            """
+            SELECT payload_json, captured_at
+            FROM source_artifacts
+            WHERE source_name = 'espn_api'
+              AND entity_type = 'team'
+              AND captured_at > datetime('now', '-7 days')
+            ORDER BY captured_at DESC
+            LIMIT 20
+            """,
+        ).fetchall()
+    except Exception:
+        empty["gaps"].append("source_artifacts query failed")
+        return empty
+
+    # Parse artifacts and find lineups mentioning this team
+    starters_list = []
+    for row in rows:
+        try:
+            payload = json.loads(_row_value(row, "payload_json", 0) or "{}")
+        except Exception:
+            continue
+        # Check if this is an ESPN lineup that includes our team
+        for side in ("home", "away"):
+            side_data = payload.get(side, {})
+            if not side_data:
+                continue
+            artifact_team = side_data.get("team_name", "")
+            if _team_name_match(team_name, artifact_team) and side_data.get("starters"):
+                starters_list.append(side_data["starters"])
+                break
+
+    if not starters_list:
+        empty["gaps"].append(f"no ESPN lineup artifacts found for team '{team_name}'")
+        return empty
+
+    latest_starting_xi = starters_list[0][:11] if starters_list else []
+    starter_counter: Counter = Counter()
+    for starters in starters_list:
+        for p in starters:
+            name = p.get("name", "")
+            if name:
+                starter_counter[name] += 1
+
+    frequent = [
+        {"player_name": name, "starts_in_sample": count}
+        for name, count in starter_counter.most_common(16)
+    ]
+
+    return {
+        "latest_starting_xi": latest_starting_xi,
+        "frequent_starters": frequent,
+        "sample_matches": [{"source": "espn_api", "starter_count": len(s)} for s in starters_list[:3]],
+        "projection_note": "Projected from ESPN recent match lineups; not a confirmed starting XI.",
     }
 
 

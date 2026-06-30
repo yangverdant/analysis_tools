@@ -231,6 +231,76 @@ def get_league_injuries(league: str = "eng.1") -> Dict:
     return {"injuries": injuries, "league": league, "source": "espn_api"}
 
 
+def find_team_recent_lineup(team_name: str, leagues: List[str] = None, max_events: int = 30) -> Dict:
+    """Find the most recent lineup for a team across league scoreboards.
+
+    Searches completed matches to find the team's last starting XI.
+    Useful for predicting lineups before a match.
+
+    Args:
+        team_name: Team name to search for (e.g., "Arsenal", "Bayern Munich")
+        leagues: List of ESPN league codes to search (default: major European leagues)
+        max_events: Maximum events to check per league
+
+    Returns:
+        {"team_name": str, "lineup": {...}, "match_info": {...}, "source": "espn_api"}
+    """
+    if not leagues:
+        leagues = ["eng.1", "esp.1", "ger.1", "ita.1", "fra.1",
+                   "uefa.champions", "uefa.europa", "ned.1", "por.1",
+                   "chn.1", "jpn.1", "usa.1", "bra.1"]
+
+    name_lower = team_name.lower()
+    for lg_code in leagues:
+        data = _api_request(f"{lg_code}/scoreboard")
+        if not data:
+            continue
+        events = data.get("events", [])
+        for ev in events[max_events:]:
+            break
+        for ev in events[:max_events]:
+            # Check if this event involves our team
+            ev_name = ev.get("name", "").lower()
+            competitions = ev.get("competitions", [])
+            if not competitions:
+                continue
+
+            found_side = None
+            for c in competitions[0].get("competitors", []):
+                team = c.get("team", {})
+                tname = team.get("displayName", "").lower()
+                tshort = team.get("shortDisplayName", "").lower()
+                if name_lower in tname or name_lower in tshort or tname in name_lower:
+                    found_side = c.get("homeAway", "")
+                    break
+
+            if not found_side:
+                continue
+
+            # Found a match with this team, get the lineup
+            eid = ev.get("id")
+            status = ev.get("status", {}).get("type", {}).get("name", "")
+            lineup = get_match_lineup(str(eid), lg_code)
+
+            if lineup.get("has_lineup"):
+                side_data = lineup.get(found_side, {})
+                if side_data.get("starters"):
+                    return {
+                        "team_name": team_name,
+                        "lineup": side_data,
+                        "match_info": {
+                            "event_id": eid,
+                            "event_name": ev.get("name", ""),
+                            "date": ev.get("date", ""),
+                            "status": status,
+                            "league": lg_code,
+                        },
+                        "source": "espn_api",
+                    }
+
+    return {"team_name": team_name, "lineup": {}, "source": "espn_api", "note": "no recent lineup found"}
+
+
 def get_team_injuries(league: str = "eng.1", team_id: int = None) -> Dict:
     """Get team-specific injuries.
 
