@@ -520,9 +520,12 @@ class OddsfeEventDetailSync:
             return None
 
         parsed = _parse_score_details(event_data.get("score_details") or "")
-        ft_home, ft_away = _event_fulltime_score(event_data, parsed)
+        ft_home, ft_away, home_90, away_90, end_type = _event_fulltime_score(event_data, parsed)
         if ft_home is None or ft_away is None:
             return None
+
+        spf_home = home_90 if home_90 is not None else ft_home
+        spf_away = away_90 if away_90 is not None else ft_away
 
         ht_home, ht_away = (None, None)
         if parsed and parsed.get("ht"):
@@ -533,10 +536,10 @@ class OddsfeEventDetailSync:
             lottery_row.get("lottery_match_id"),
             lottery_row.get("handicap_line") or 0,
         )
-        derived = _derive_play_types(ft_home, ft_away, ht_home, ht_away, handicap)
+        derived = _derive_play_types(spf_home, spf_away, ht_home, ht_away, handicap)
         bqc_result = _resolve_bqc_result(
-            ft_home,
-            ft_away,
+            spf_home,
+            spf_away,
             ht_home,
             ht_away,
             source_name="oddsfe_event",
@@ -547,7 +550,7 @@ class OddsfeEventDetailSync:
             from backend.app.lottery.services.ou_calculator import compute_ou_result
 
             ou_line = self._ou_line_for_result(lottery_row)
-            ou_result = compute_ou_result(ft_home + ft_away, ou_line or 2.5)
+            ou_result = compute_ou_result(spf_home + spf_away, ou_line or 2.5)
         except Exception:
             ou_result = None
 
@@ -556,6 +559,9 @@ class OddsfeEventDetailSync:
             "match_id": lottery_row.get("match_id"),
             "home_goals_ft": ft_home,
             "away_goals_ft": ft_away,
+            "home_goals_90min": home_90,
+            "away_goals_90min": away_90,
+            "match_end_type": end_type,
             "home_goals_ht": ht_home,
             "away_goals_ht": ht_away,
             "spf_result": derived.get("spf_result"),

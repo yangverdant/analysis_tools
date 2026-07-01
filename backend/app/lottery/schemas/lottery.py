@@ -166,10 +166,13 @@ class LotteryResult:
     lottery_match_id: str
 
     # 实际比分
-    home_goals_ft: Optional[int] = None      # 全场主队进球
-    away_goals_ft: Optional[int] = None      # 全场客队进球
+    home_goals_ft: Optional[int] = None      # 全场主队进球(含加时,不含点球数)
+    away_goals_ft: Optional[int] = None      # 全场客队进球(含加时,不含点球数)
     home_goals_ht: Optional[int] = None      # 半场主队进球
     away_goals_ht: Optional[int] = None      # 半场客队进球
+    home_goals_90min: Optional[int] = None   # 90分钟常规时间主队进球
+    away_goals_90min: Optional[int] = None   # 90分钟常规时间客队进球
+    match_end_type: Optional[str] = None     # 结束方式: FT/AET/AP
 
     # 各玩法开奖结果
     spf_result: Optional[str] = None         # 胜平负结果 3/1/0
@@ -198,6 +201,9 @@ class LotteryResult:
             'lottery_match_id': self.lottery_match_id,
             'home_goals_ft': self.home_goals_ft,
             'away_goals_ft': self.away_goals_ft,
+            'home_goals_90min': self.home_goals_90min,
+            'away_goals_90min': self.away_goals_90min,
+            'match_end_type': self.match_end_type,
             'spf_result': self.spf_result,
             'bf_result': self.bf_result,
             'bqc_result': self.bqc_result,

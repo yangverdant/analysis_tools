@@ -50,11 +50,12 @@
         </div>
       </div>
 
-      <div class="wc-section-title">
-        <h3>{{ t.groupShapeTitle }}</h3>
+      <div class="wc-section-title collapsible" @click="groupSectionOpen = !groupSectionOpen">
+        <h3>{{ t.groupShapeTitle }} <span class="collapse-indicator">{{ groupSectionOpen ? '▾' : '▸' }}</span></h3>
         <span>{{ t.groupShapeNote }}</span>
       </div>
-      <div class="wc-groups-grid">
+      <div class="wc-collapsible-body" :class="{ collapsed: !groupSectionOpen }">
+        <div class="wc-groups-grid">
         <article v-for="group in groupsList" :key="group.group" class="wc-group-card">
           <div class="wc-group-top">
             <strong>{{ group.name }}</strong>
@@ -84,12 +85,14 @@
             </tbody>
           </table>
         </article>
+        </div>
       </div>
 
-      <div class="wc-section-title">
-        <h3>{{ t.thirdTitle }}</h3>
+      <div class="wc-section-title collapsible" @click="thirdSectionOpen = !thirdSectionOpen">
+        <h3>{{ t.thirdTitle }} <span class="collapse-indicator">{{ thirdSectionOpen ? '▾' : '▸' }}</span></h3>
         <span>{{ t.thirdNote }}</span>
       </div>
+      <div class="wc-collapsible-body" :class="{ collapsed: !thirdSectionOpen }">
       <div class="wc-third-table-wrap">
         <table class="wc-third-table">
           <thead>
@@ -117,103 +120,109 @@
             </tr>
           </tbody>
         </table>
+        </div>
       </div>
 
-      <div class="wc-section-title">
-        <h3>{{ t.knockoutTitle }}</h3>
+      <div class="wc-section-title collapsible" @click="knockoutSectionOpen = !knockoutSectionOpen">
+        <h3>{{ t.knockoutTitle }} <span class="collapse-indicator">{{ knockoutSectionOpen ? '▾' : '▸' }}</span></h3>
         <span>{{ t.knockoutNote }}</span>
       </div>
-      <div v-if="bracketGraph" class="wc-bracket-map">
-        <div class="wc-path-side left" :style="bracketSideStyle">
-          <svg class="wc-path-lines" :viewBox="bracketViewBox" preserveAspectRatio="none" aria-hidden="true">
-            <path v-for="line in bracketLines(bracketGraph.left)" :key="line.key" :d="line.d" />
-          </svg>
-          <article
-            v-for="node in orderedNodes(bracketGraph.left)"
-            :key="`left-${node.match_number}`"
-            class="wc-path-node"
-            tabindex="0"
-            :style="nodeStyle(node)"
-          >
-            <BracketNode
-              :node="node"
-              :t="t"
-              :stage-label="stageLabel"
-              :short-date="shortDate"
-              :participant-title="participantTitle"
-              :participant-meta="participantMeta"
-              :participant-state-label="participantStateLabel"
-              :candidate-rows="candidateRows"
-              :display-team="displayTeam"
-              :signed="signed"
-              :is-locked="isLocked"
-            />
-          </article>
-        </div>
+      <div class="wc-collapsible-body" :class="{ collapsed: !knockoutSectionOpen }">
+      <div class="wc-bracket-wrap">
+        <div v-if="bracketGraph" class="wc-bracket-map">
+          <div class="wc-path-side left" :style="bracketSideStyle">
+            <svg class="wc-path-lines" :viewBox="bracketViewBox" preserveAspectRatio="none" aria-hidden="true">
+              <path v-for="line in bracketLines(bracketGraph.left)" :key="line.key" :d="line.d" />
+            </svg>
+            <article
+              v-for="node in orderedNodes(bracketGraph.left)"
+              :key="`left-${node.match_number}`"
+              class="wc-path-node"
+              tabindex="0"
+              :style="nodeStyle(node)"
+            >
+              <BracketNode
+                :node="node"
+                :t="t"
+                :stage-label="stageLabel"
+                :short-date="shortDate"
+                :participant-title="participantTitle"
+                :participant-meta="participantMeta"
+                :participant-state-label="participantStateLabel"
+                :candidate-rows="candidateRows"
+                :display-team="displayTeam"
+                :signed="signed"
+                :is-locked="isLocked"
+              />
+            </article>
+          </div>
 
-        <div class="wc-path-center">
-          <article v-if="bracketGraph.final" class="wc-final-node" tabindex="0">
-            <div class="wc-final-title">{{ t.final }}</div>
-            <BracketNode
-              :node="bracketGraph.final"
-              :t="t"
-              :stage-label="stageLabel"
-              :short-date="shortDate"
-              :participant-title="participantTitle"
-              :participant-meta="participantMeta"
-              :participant-state-label="participantStateLabel"
-              :candidate-rows="candidateRows"
-              :display-team="displayTeam"
-              :signed="signed"
-              :is-locked="isLocked"
-              compact
-            />
-          </article>
-          <article v-if="bracketGraph.third_place" class="wc-third-node" tabindex="0">
-            <div class="wc-final-title">{{ t.thirdPlace }}</div>
-            <BracketNode
-              :node="bracketGraph.third_place"
-              :t="t"
-              :stage-label="stageLabel"
-              :short-date="shortDate"
-              :participant-title="participantTitle"
-              :participant-meta="participantMeta"
-              :participant-state-label="participantStateLabel"
-              :candidate-rows="candidateRows"
-              :display-team="displayTeam"
-              :signed="signed"
-              :is-locked="isLocked"
-              compact
-            />
-          </article>
-        </div>
+          <div class="wc-path-center">
+            <article v-if="bracketGraph.final" class="wc-final-node" tabindex="0">
+              <div class="wc-final-title">{{ t.final }}</div>
+              <BracketNode
+                :node="bracketGraph.final"
+                :t="t"
+                :stage-label="stageLabel"
+                :short-date="shortDate"
+                :participant-title="participantTitle"
+                :participant-meta="participantMeta"
+                :participant-state-label="participantStateLabel"
+                :candidate-rows="candidateRows"
+                :display-team="displayTeam"
+                :signed="signed"
+                :is-locked="isLocked"
+                compact
+              />
+            </article>
+            <article v-if="bracketGraph.third_place" class="wc-third-node" tabindex="0">
+              <div class="wc-final-title">{{ t.thirdPlace }}</div>
+              <BracketNode
+                :node="bracketGraph.third_place"
+                :t="t"
+                :stage-label="stageLabel"
+                :short-date="shortDate"
+                :participant-title="participantTitle"
+                :participant-meta="participantMeta"
+                :participant-state-label="participantStateLabel"
+                :candidate-rows="candidateRows"
+                :display-team="displayTeam"
+                :signed="signed"
+                :is-locked="isLocked"
+                compact
+              />
+            </article>
+          </div>
 
-        <div class="wc-path-side right" :style="bracketSideStyle">
-          <svg class="wc-path-lines" :viewBox="bracketViewBox" preserveAspectRatio="none" aria-hidden="true">
-            <path v-for="line in bracketLines(bracketGraph.right)" :key="line.key" :d="line.d" />
-          </svg>
-          <article
-            v-for="node in orderedNodes(bracketGraph.right)"
-            :key="`right-${node.match_number}`"
-            class="wc-path-node"
-            tabindex="0"
-            :style="nodeStyle(node)"
-          >
-            <BracketNode
-              :node="node"
-              :t="t"
-              :stage-label="stageLabel"
-              :short-date="shortDate"
-              :participant-title="participantTitle"
-              :participant-meta="participantMeta"
-              :participant-state-label="participantStateLabel"
-              :candidate-rows="candidateRows"
-              :display-team="displayTeam"
-              :signed="signed"
-              :is-locked="isLocked"
-            />
-          </article>
+          <div class="wc-path-side right" :style="bracketSideStyle">
+            <svg class="wc-path-lines" :viewBox="bracketViewBox" preserveAspectRatio="none" aria-hidden="true">
+              <path v-for="line in bracketLines(bracketGraph.right)" :key="line.key" :d="line.d" />
+            </svg>
+            <article
+              v-for="node in orderedNodes(bracketGraph.right)"
+              :key="`right-${node.match_number}`"
+              class="wc-path-node"
+              tabindex="0"
+              :style="nodeStyle(node)"
+            >
+              <BracketNode
+                :node="node"
+                :t="t"
+                :stage-label="stageLabel"
+                :short-date="shortDate"
+                :participant-title="participantTitle"
+                :participant-meta="participantMeta"
+                :participant-state-label="participantStateLabel"
+                :candidate-rows="candidateRows"
+                :display-team="displayTeam"
+                :signed="signed"
+                :is-locked="isLocked"
+              />
+            </article>
+          </div>
         </div>
+        <div v-else class="wc-bracket-empty">{{ t.noData || '暂无淘汰赛数据' }}</div>
+      </div>
       </div>
     </template>
   </section>
@@ -299,6 +308,9 @@ export default {
     const loading = ref(false)
     const error = ref('')
     const liveMode = ref(true)
+    const groupSectionOpen = ref(false)
+    const thirdSectionOpen = ref(true)
+    const knockoutSectionOpen = ref(true)
     const t = {
       title: '世界杯小组与晋级视图',
       liveSource: '实时源',
@@ -621,9 +633,33 @@ export default {
   justify-content: space-between;
   gap: 12px;
 }
+.wc-collapsible-body {
+  overflow: hidden;
+  max-height: 2000px;
+  transition: max-height 0.35s ease, opacity 0.25s ease;
+  opacity: 1;
+}
+.wc-collapsible-body.collapsed {
+  max-height: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.wc-section-title.collapsible {
+  cursor: pointer;
+  user-select: none;
+}
+.wc-section-title.collapsible:hover h3 {
+  color: #60a5fa;
+}
 .wc-section-title h3 {
   margin: 0;
   font-size: 18px;
+}
+.collapse-indicator {
+  font-size: 14px;
+  margin-left: 6px;
+  opacity: 0.6;
 }
 .wc-section-title span {
   color: #94a3b8;

@@ -867,12 +867,16 @@ class WorldCupContextService:
                 if best_match and best_score >= 1:
                     lookup[number] = best_match
                     unmatched_sources.remove(best_match)
-            # Fallback: remaining matches by position for stages without team info
+            # Fallback: remaining matches by position — but only if match has finished (has a result)
+            # Unfinished placeholder matches from API often have wrong team assignments
             remaining_numbers = sorted([number for number, stage, *_ in BRACKET if stage == bracket_stage and number not in lookup])
             remaining_numbers.sort()
             remaining_sources = sorted(unmatched_sources, key=lambda match: (match.get("date") or "", match.get("time") or "", str(match.get("match_id") or "")))
             for number, match in zip(remaining_numbers, remaining_sources):
-                lookup[number] = match
+                score = match.get("score") or {}
+                has_result = score.get("home_ft") is not None and score.get("away_ft") is not None
+                if has_result:
+                    lookup[number] = match
         return lookup
 
     def _match_bracket_score(self, match: Dict[str, Any], team1_slot: str, team2_slot: str) -> int:
@@ -942,8 +946,10 @@ class WorldCupContextService:
         team1_resolution = self._resolve_slot(team1_slot, groups, third_table, third_place_assignment, number)
         team2_resolution = self._resolve_slot(team2_slot, groups, third_table, third_place_assignment, number)
         if api_match:
-            team1_resolution = self._with_api_team(api_match.get("home_team"), team1_resolution)
-            team2_resolution = self._with_api_team(api_match.get("away_team"), team2_resolution)
+            api_score = api_match.get("score") or {}
+            api_finished = api_score.get("home_ft") is not None
+            team1_resolution = self._with_api_team(api_match.get("home_team"), team1_resolution, force=api_finished)
+            team2_resolution = self._with_api_team(api_match.get("away_team"), team2_resolution, force=api_finished)
         return {
             "match_number": number,
             "match_id": (api_match or {}).get("match_id"),
@@ -967,7 +973,9 @@ class WorldCupContextService:
             "loser_feeds_from": self._loser_match_refs(team1_slot, team2_slot),
         }
 
-    def _with_api_team(self, api_team: Optional[Dict[str, Any]], fallback: Dict[str, Any]) -> Dict[str, Any]:
+    def _with_api_team(self, api_team: Optional[Dict[str, Any]], fallback: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
+        if not force and fallback.get("status") in ("official_match_team", "resolved_from_previous_match_result", "locked_group_position"):
+            return fallback
         if not self._has_team_name(api_team):
             return fallback
         result = dict(fallback)
@@ -1113,7 +1121,18 @@ class WorldCupContextService:
             self._flatten_tree(child, nodes)
         nodes.append(tree)
 
+    _CITY_CN = {
+        "Inglewood": "英格尔伍德", "Foxborough": "福克斯堡", "Guadalupe": "瓜达卢佩",
+        "Houston": "休斯顿", "East Rutherford": "东拉瑟福德", "Arlington": "阿灵顿",
+        "Mexico City": "墨西哥城", "Atlanta": "亚特兰大", "Santa Clara": "圣克拉拉",
+        "Seattle": "西雅图", "Toronto": "多伦多", "Vancouver": "温哥华",
+        "Miami Gardens": "迈阿密花园", "Kansas City": "堪萨斯城",
+        "Philadelphia": "费城", "Foxborough": "福克斯堡",
+    }
+
     def _graph_node(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        city_en = item.get("city")
+        city_cn = self._CITY_CN.get(city_en, city_en)
         return {
             "match_number": item.get("match_number"),
             "match_id": item.get("match_id"),
@@ -1121,7 +1140,7 @@ class WorldCupContextService:
             "date": item.get("date"),
             "time": item.get("time"),
             "status": item.get("status"),
-            "city": item.get("city"),
+            "city": city_cn,
             "score": item.get("score"),
             "participants": item.get("participants", []),
             "feeds_from": item.get("feeds_from", []),

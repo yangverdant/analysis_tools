@@ -266,22 +266,82 @@ def _safe_int_value(value) -> Optional[int]:
 
 
 def _event_fulltime_score(event_data: Dict, parsed: Optional[Dict] = None) -> tuple:
-    """Use event score as the full-time source of truth, then parsed details."""
-    home = _safe_int_value(
+    """Return (home_ft, away_ft, home_90min, away_90min, end_type).
+
+    For AET/AP matches:
+      - home_ft/away_ft = aggregate score (incl. extra time, excl. penalties)
+      - home_90min/away_90min = 90-minute regular time score
+      - end_type = 'AET' or 'AP'
+    For FT matches:
+      - all scores identical, end_type = 'FT'
+    """
+    event_status = str(event_data.get('event_status') or '').upper()
+    is_et_status = event_status in ('AET', 'AP')
+
+    # Aggregate score from event_data (may include penalties for AP)
+    home_raw = _safe_int_value(
         event_data.get("score_home")
         or event_data.get("event_score_home")
         or event_data.get("home_score")
     )
-    away = _safe_int_value(
+    away_raw = _safe_int_value(
         event_data.get("score_away")
         or event_data.get("event_score_away")
         or event_data.get("away_score")
     )
-    if home is not None and away is not None:
-        return home, away
-    if parsed and parsed.get("ft"):
-        return parsed["ft"]
-    return None, None
+
+    # Detect AET/AP from parsed periods even when event_status is just FINISHED
+    has_et = parsed and parsed.get('et') is not None
+    has_pen = parsed and parsed.get('pen') is not None
+    if has_pen:
+        end_type = 'AP'
+    elif has_et:
+        end_type = 'AET'
+    elif is_et_status:
+        end_type = event_status
+    else:
+        end_type = 'FT'
+
+    # Compute 90min score from parsed periods
+    home_90 = None
+    away_90 = None
+    if parsed and parsed.get('ht') and parsed.get('second_half'):
+        ht = parsed['ht']
+        sh = parsed['second_half']
+        home_90 = ht[0] + sh[0]
+        away_90 = ht[1] + sh[1]
+
+    # Compute FT (aggregate excluding penalties) from parsed periods
+    home_ft = None
+    away_ft = None
+    if parsed:
+        home_ft = 0
+        away_ft = 0
+        for key in ('ht', 'second_half', 'et'):
+            period = parsed.get(key)
+            if period:
+                home_ft += period[0]
+                away_ft += period[1]
+
+    # Fallback: use event_data raw score for FT (but strip penalties if we know it's AP)
+    if home_ft is None or away_ft is None:
+        if end_type == 'AP' and home_90 is not None and away_90 is not None:
+            if parsed and parsed.get('et'):
+                et = parsed['et']
+                home_ft = home_90 + et[0]
+                away_ft = away_90 + et[1]
+            else:
+                home_ft = home_90
+                away_ft = away_90
+        else:
+            home_ft = home_raw
+            away_ft = away_raw
+
+    if home_90 is None or away_90 is None:
+        home_90 = home_ft
+        away_90 = away_ft
+
+    return home_ft, away_ft, home_90, away_90, end_type
 
 
 def _parse_score_details(score_details: str) -> Optional[Dict]:
@@ -1791,6 +1851,9 @@ class LotterySyncService:
                         'away_goals_ft': self._safe_int(result.get('away_goals_ft') or result.get('awayScore')),
                         'home_goals_ht': self._safe_int(result.get('home_goals_ht') or result.get('homeScoreHt')),
                         'away_goals_ht': self._safe_int(result.get('away_goals_ht') or result.get('awayScoreHt')),
+                        'home_goals_90min': self._safe_int(result.get('home_goals_90min')),
+                        'away_goals_90min': self._safe_int(result.get('away_goals_90min')),
+                        'match_end_type': result.get('match_end_type'),
                         'spf_result': result.get('spf_result') or result.get('spfResult'),
                         'bf_result': result.get('bf_result') or result.get('bfResult'),
                         'bqc_result': _normalize_bqc_result(result.get('bqc_result') or result.get('bqcResult')),
@@ -1804,23 +1867,69 @@ class LotterySyncService:
                     conn = sqlite3.connect(self.db_path)
                     cursor = conn.cursor()
                     try:
-                        cursor.execute("""
-                            INSERT OR REPLACE INTO lottery_results
-                            (lottery_match_id, home_goals_ft, away_goals_ft,
-                             home_goals_ht, away_goals_ht,
-                             spf_result, bf_result, bqc_result, rqspf_result)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            lm_id,
-                            result_data.get('home_goals_ft'),
-                            result_data.get('away_goals_ft'),
-                            result_data.get('home_goals_ht'),
-                            result_data.get('away_goals_ht'),
-                            result_data.get('spf_result'),
-                            result_data.get('bf_result'),
-                            result_data.get('bqc_result'),
-                            result_data.get('rqspf_result')
-                        ))
+                        # Check if result already exists
+                        cursor.execute(
+                            "SELECT lottery_match_id, home_goals_90min, away_goals_90min, match_end_type, spf_result, bqc_result FROM lottery_results WHERE lottery_match_id = ?",
+                            (lm_id,)
+                        )
+                        existing_row = cursor.fetchone()
+
+                        if existing_row:
+                            # Update only missing fields, preserve 90min/end_type/spf_result
+                            updates = []
+                            params = []
+                            if result_data.get('home_goals_ft') is not None:
+                                updates.append('home_goals_ft = ?')
+                                params.append(result_data['home_goals_ft'])
+                            if result_data.get('away_goals_ft') is not None:
+                                updates.append('away_goals_ft = ?')
+                                params.append(result_data['away_goals_ft'])
+                            if result_data.get('home_goals_ht') is not None and existing_row[1] is None:
+                                updates.append('home_goals_ht = ?')
+                                params.append(result_data['home_goals_ht'])
+                            if result_data.get('away_goals_ht') is not None and existing_row[2] is None:
+                                updates.append('away_goals_ht = ?')
+                                params.append(result_data['away_goals_ht'])
+                            if result_data.get('spf_result') and existing_row[4] is None:
+                                updates.append('spf_result = ?')
+                                params.append(result_data['spf_result'])
+                            if result_data.get('bf_result') and not existing_row[4]:
+                                updates.append('bf_result = ?')
+                                params.append(result_data['bf_result'])
+                            if result_data.get('bqc_result') and existing_row[5] is None:
+                                updates.append('bqc_result = ?')
+                                params.append(result_data['bqc_result'])
+                            if result_data.get('rqspf_result') is None:
+                                updates.append('rqspf_result = ?')
+                                params.append(result_data.get('rqspf_result'))
+                            # Never overwrite 90min/end_type from sporttery data
+                            if updates:
+                                sql = f"UPDATE lottery_results SET {', '.join(updates)} WHERE lottery_match_id = ?"
+                                params.append(lm_id)
+                                cursor.execute(sql, params)
+                        else:
+                            # Insert new result
+                            cursor.execute("""
+                                INSERT INTO lottery_results
+                                (lottery_match_id, home_goals_ft, away_goals_ft,
+                                 home_goals_ht, away_goals_ht,
+                                 home_goals_90min, away_goals_90min, match_end_type,
+                                 spf_result, bf_result, bqc_result, rqspf_result)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                lm_id,
+                                result_data.get('home_goals_ft'),
+                                result_data.get('away_goals_ft'),
+                                result_data.get('home_goals_ht'),
+                                result_data.get('away_goals_ht'),
+                                result_data.get('home_goals_90min'),
+                                result_data.get('away_goals_90min'),
+                                result_data.get('match_end_type'),
+                                result_data.get('spf_result'),
+                                result_data.get('bf_result'),
+                                result_data.get('bqc_result'),
+                                result_data.get('rqspf_result')
+                            ))
                         conn.commit()
                         saved += 1
                     except Exception as e:
@@ -1888,16 +1997,19 @@ class LotterySyncService:
                 continue
 
             ht_home, ht_away = parsed['ht']
-            ft_home, ft_away = _event_fulltime_score(event_data, parsed)
+            ft_home, ft_away, home_90, away_90, end_type = _event_fulltime_score(event_data, parsed)
             if ft_home is None or ft_away is None:
                 ft_home, ft_away = row['home_goals_ft'], row['away_goals_ft']
             if ft_home is None or ft_away is None:
                 continue
 
             # �Ƶ�BQC
+            # For SPF/BQC: use 90min scores (AET/AP matches settle on 90min)
+            spf_home = home_90 if home_90 is not None else ft_home
+            spf_away = away_90 if away_90 is not None else ft_away
             handicap = _effective_handicap(self.db_path, row['lottery_match_id'], row.get('handicap_line', 0) or 0)
             derived = _derive_play_types(
-                ft_home, ft_away, ht_home, ht_away,
+                spf_home, spf_away, ht_home, ht_away,
                 handicap
             )
 
@@ -1915,8 +2027,8 @@ class LotterySyncService:
                     updates.append('away_goals_ht = ?')
                     params.append(ht_away)
                 resolved_bqc = _resolve_bqc_result(
-                    ft_home,
-                    ft_away,
+                    spf_home,
+                    spf_away,
                     ht_home,
                     ht_away,
                     source_bqc=row.get('bqc_result'),
@@ -1926,6 +2038,16 @@ class LotterySyncService:
                 if resolved_bqc and _normalize_bqc_result(row.get('bqc_result')) != resolved_bqc:
                     updates.append('bqc_result = ?')
                     params.append(resolved_bqc)
+                # Write 90min and end_type fields for AET/AP matches
+                if home_90 is not None:
+                    updates.append('home_goals_90min = ?')
+                    params.append(home_90)
+                if away_90 is not None:
+                    updates.append('away_goals_90min = ?')
+                    params.append(away_90)
+                if end_type != 'FT':
+                    updates.append('match_end_type = ?')
+                    params.append(end_type)
 
                 if updates:
                     sql = f"UPDATE lottery_results SET {', '.join(updates)} WHERE rowid = ?"
@@ -1958,12 +2080,15 @@ class LotterySyncService:
                    lm.oddsfe_event_id, lm.handicap_line,
                    lr.home_goals_ft, lr.away_goals_ft, lr.home_goals_ht, lr.away_goals_ht,
                    lr.bqc_result, lr.spf_result, lr.bf_result, lr.rqspf_result,
+                   lr.home_goals_90min, lr.away_goals_90min, lr.match_end_type,
+                   lr.penalty_home, lr.penalty_away,
                    CASE WHEN lr.lottery_match_id IS NULL THEN 0 ELSE 1 END AS has_result
             FROM lottery_matches lm
             LEFT JOIN lottery_results lr ON lm.lottery_match_id = lr.lottery_match_id
             WHERE lm.match_date = ?
               AND lm.oddsfe_event_id IS NOT NULL
-              AND (lr.lottery_match_id IS NULL OR lr.home_goals_ht IS NULL OR lr.bqc_result IS NULL)
+              AND (lr.lottery_match_id IS NULL OR lr.home_goals_ht IS NULL OR lr.bqc_result IS NULL
+                   OR lr.home_goals_90min IS NULL OR lr.match_end_type IS NULL)
         """, (date_str,))
         rows = [dict(r) for r in cursor.fetchall()]
         conn.close()
@@ -1993,7 +2118,7 @@ class LotterySyncService:
                 continue
 
             ht_home, ht_away = parsed.get('ht', (None, None))
-            ft_home, ft_away = _event_fulltime_score(event_data, parsed)
+            ft_home, ft_away, home_90, away_90, end_type = _event_fulltime_score(event_data, parsed)
             if ft_home is None or ft_away is None:
                 ft_home, ft_away = row['home_goals_ft'], row['away_goals_ft']
 
@@ -2002,7 +2127,10 @@ class LotterySyncService:
 
             # �Ƶ�ȫ���淨���
             handicap = _effective_handicap(self.db_path, lm_id, row.get('handicap_line') or 0)
-            derived = _derive_play_types(ft_home, ft_away, ht_home, ht_away, handicap)
+            # For SPF/BQC/OU: use 90min scores (AET/AP matches settle on 90min)
+            spf_home = home_90 if home_90 is not None else ft_home
+            spf_away = away_90 if away_90 is not None else ft_away
+            derived = _derive_play_types(spf_home, spf_away, ht_home, ht_away, handicap)
 
             # �������½��
             conn = sqlite3.connect(self.db_path)
@@ -2019,7 +2147,14 @@ class LotterySyncService:
                     if row['home_goals_ft'] is None:
                         updates.append('home_goals_ft = ?')
                         params.append(ft_home)
+                    elif end_type in ('AET', 'AP') and ft_home is not None and row['home_goals_ft'] != ft_home:
+                        # AET/AP: home_goals_ft should exclude penalties, force correct value
+                        updates.append('home_goals_ft = ?')
+                        params.append(ft_home)
                     if row['away_goals_ft'] is None:
+                        updates.append('away_goals_ft = ?')
+                        params.append(ft_away)
+                    elif end_type in ('AET', 'AP') and ft_away is not None and row['away_goals_ft'] != ft_away:
                         updates.append('away_goals_ft = ?')
                         params.append(ft_away)
                     if row['home_goals_ht'] is None and ht_home is not None:
@@ -2029,8 +2164,8 @@ class LotterySyncService:
                         updates.append('away_goals_ht = ?')
                         params.append(ht_away)
                     resolved_bqc = _resolve_bqc_result(
-                        ft_home,
-                        ft_away,
+                        spf_home,
+                        spf_away,
                         ht_home,
                         ht_away,
                         source_bqc=row.get('bqc_result'),
@@ -2043,12 +2178,46 @@ class LotterySyncService:
                     if not row.get('spf_result') and derived.get('spf_result'):
                         updates.append('spf_result = ?')
                         params.append(derived['spf_result'])
+                    elif end_type in ('AET', 'AP') and derived.get('spf_result'):
+                        # AET/AP: SPF must be based on 90min, force update if wrong
+                        if row.get('spf_result') != derived['spf_result']:
+                            updates.append('spf_result = ?')
+                            params.append(derived['spf_result'])
                     if not row.get('bf_result'):
                         updates.append('bf_result = ?')
-                        params.append(f"{ft_home}:{ft_away}")
+                        params.append(f"{spf_home}:{spf_away}")
                     if not row.get('rqspf_result') and derived.get('rqspf_result'):
                         updates.append('rqspf_result = ?')
                         params.append(derived['rqspf_result'])
+                    # Write 90min and end_type fields for AET/AP matches
+                    if home_90 is not None and row.get('home_goals_90min') is None:
+                        updates.append('home_goals_90min = ?')
+                        params.append(home_90)
+                    elif end_type in ('AET', 'AP') and home_90 is not None and row.get('home_goals_90min') != home_90:
+                        updates.append('home_goals_90min = ?')
+                        params.append(home_90)
+                    if away_90 is not None and row.get('away_goals_90min') is None:
+                        updates.append('away_goals_90min = ?')
+                        params.append(away_90)
+                    elif end_type in ('AET', 'AP') and away_90 is not None and row.get('away_goals_90min') != away_90:
+                        updates.append('away_goals_90min = ?')
+                        params.append(away_90)
+                    if end_type != 'FT' and not row.get('match_end_type'):
+                        updates.append('match_end_type = ?')
+                        params.append(end_type)
+                    elif end_type != 'FT' and row.get('match_end_type') != end_type:
+                        updates.append('match_end_type = ?')
+                        params.append(end_type)
+                    # Write penalty scores for AP matches
+                    pen = parsed.get('pen') if parsed else None
+                    if pen and end_type == 'AP':
+                        pen_home, pen_away = pen
+                        if row.get('penalty_home') is None or row.get('penalty_home') != pen_home:
+                            updates.append('penalty_home = ?')
+                            params.append(pen_home)
+                        if row.get('penalty_away') is None or row.get('penalty_away') != pen_away:
+                            updates.append('penalty_away = ?')
+                            params.append(pen_away)
 
                     if updates:
                         sql = f"UPDATE lottery_results SET {', '.join(updates)} WHERE lottery_match_id = ?"
@@ -2062,14 +2231,16 @@ class LotterySyncService:
                         INSERT INTO lottery_results
                         (lottery_match_id, home_goals_ft, away_goals_ft,
                          home_goals_ht, away_goals_ht,
+                         home_goals_90min, away_goals_90min, match_end_type,
                          spf_result, bf_result, bqc_result, rqspf_result)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         lm_id, ft_home, ft_away, ht_home, ht_away,
-                        derived.get('spf_result'), f"{ft_home}:{ft_away}",
+                        home_90, away_90, end_type,
+                        derived.get('spf_result'), f"{spf_home}:{spf_away}",
                         _resolve_bqc_result(
-                            ft_home,
-                            ft_away,
+                            spf_home,
+                            spf_away,
                             ht_home,
                             ht_away,
                             source_name='oddsfe_event',
@@ -2097,6 +2268,12 @@ class LotterySyncService:
         ht_h = result_data.get('home_goals_ht')
         ht_a = result_data.get('away_goals_ht')
 
+        # For SPF/BQC/OU: use 90min scores when available (AET/AP matches)
+        h90 = result_data.get('home_goals_90min')
+        a90 = result_data.get('away_goals_90min')
+        spf_h = h90 if h90 is not None else ft_h
+        spf_a = a90 if a90 is not None else ft_a
+
         if ft_h is not None and ft_a is not None:
             # ��ȡhandicap_line
             lm_id = result_data.get('lottery_match_id')
@@ -2119,15 +2296,15 @@ class LotterySyncService:
 
             source_bqc = result_data.get('bqc_result')
             result_data['bqc_result'] = _resolve_bqc_result(
-                ft_h,
-                ft_a,
+                spf_h,
+                spf_a,
                 ht_h,
                 ht_a,
                 source_bqc=source_bqc,
                 source_name='sporttery_results',
                 lottery_match_id=lm_id,
             )
-            derived = _derive_play_types(ft_h, ft_a, ht_h, ht_a, handicap)
+            derived = _derive_play_types(spf_h, spf_a, ht_h, ht_a, handicap)
 
             # ֻ���ȱʧ��
             if not result_data.get('spf_result'):

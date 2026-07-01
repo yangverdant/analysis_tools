@@ -418,55 +418,6 @@ def _format_bqc_result(code: Optional[str]) -> Optional[str]:
     return normalized or raw
 
 
-def _lookup_team_id(cursor, team: Dict[str, Any]) -> Optional[int]:
-    names = [
-        team.get("name_cn"),
-        team.get("short_name"),
-        team.get("name"),
-        team.get("team_name_cn"),
-        team.get("team_name"),
-    ]
-    names = [str(item).strip() for item in names if item]
-    tla = team.get("tla")
-    try:
-        columns = get_table_columns(cursor, "teams")
-        name_columns = [
-            col for col in (
-                "name_cn",
-                "name_en",
-                "short_name",
-                "sporttery_name_cn",
-                "sporttery_name_en",
-                "oddsfe_name_cn",
-                "oddsfe_name_en",
-                "apifootball_name_cn",
-                "apifootball_name_en",
-            )
-            if col in columns
-        ]
-        for name in names:
-            if name_columns:
-                where = " OR ".join(f"{col} = ?" for col in name_columns)
-                row = cursor.execute(
-                    f"SELECT team_id FROM teams WHERE {where} LIMIT 1",
-                    tuple(name for _ in name_columns),
-                ).fetchone()
-                if row:
-                    return row[0]
-        if tla:
-            code_columns = [col for col in ("tla", "fifa_code") if col in columns]
-            if code_columns:
-                where = " OR ".join(f"{col} = ?" for col in code_columns)
-                row = cursor.execute(
-                    f"SELECT team_id FROM teams WHERE {where} LIMIT 1",
-                    tuple(tla for _ in code_columns),
-                ).fetchone()
-                if row:
-                    return row[0]
-    except sqlite3.Error:
-        return None
-    return None
-
 
 def _is_world_cup_match(match: Dict[str, Any]) -> bool:
     text = " ".join(str(match.get(key) or "") for key in (
@@ -485,7 +436,7 @@ def _world_cup_schedule_index() -> Optional[Dict[str, Any]]:
         from backend.app.worldcup.service import WorldCupContextService
 
         service = WorldCupContextService()
-        context = service.get_context(live=False, include_matches=True)
+        context = service.get_context(live=True, include_matches=True)
         by_pair: Dict[tuple, Dict[str, Any]] = {}
         for item in context.get("matches", []):
             home = item.get("home_team") or {}
@@ -630,7 +581,14 @@ def _align_ou_result_to_prediction(match: Dict[str, Any]) -> None:
     try:
         from backend.app.lottery.services.ou_calculator import compute_ou_result_from_prediction
 
-        total_goals = int(match.get("home_goals_ft") or 0) + int(match.get("away_goals_ft") or 0)
+        # For AET/AP matches, O/U settles on 90-minute goals
+        end_type = match.get("match_end_type")
+        h_90 = match.get("home_goals_90min")
+        a_90 = match.get("away_goals_90min")
+        if end_type in ("AET", "AP") and h_90 is not None and a_90 is not None:
+            total_goals = int(h_90) + int(a_90)
+        else:
+            total_goals = int(match.get("home_goals_ft") or 0) + int(match.get("away_goals_ft") or 0)
         match["ou_result"] = compute_ou_result_from_prediction(total_goals, match.get("ou_rec"))
     except Exception:
         return
@@ -742,116 +700,7 @@ def _cached_oddsfe_event_detail(cursor, event_id: str) -> Optional[Dict[str, Any
     return None
 
 
-def _oddsfe_match_for_world_cup(
-    schedule_match: Dict[str, Any],
-    schedule_index: Optional[Dict[str, Any]],
-    cursor=None,
-    allow_network: bool = False,
-) -> Optional[Dict[str, Any]]:
-    if not schedule_index:
-        return None
-    utc_date = schedule_match.get("utc_date")
-    if not utc_date:
-        return None
-    service = schedule_index["service"]
-    home_aliases = _world_cup_aliases(service, schedule_match.get("home_team") or {})
-    away_aliases = _world_cup_aliases(service, schedule_match.get("away_team") or {})
-    try:
-        utc_dt = datetime.fromisoformat(str(utc_date).replace("Z", "+00:00")).replace(tzinfo=None)
-    except ValueError:
-        return None
-    date_strs = sorted({(utc_dt + timedelta(days=offset)).strftime("%Y-%m-%d") for offset in (-1, 0, 1)})
-    best = None
-    best_score = -1.0
 
-    def consider_event(event: Dict[str, Any]) -> None:
-        nonlocal best, best_score
-        home_key = service._norm_name(event.get("team_home_name") or event.get("home_team") or "")
-        away_key = service._norm_name(event.get("team_away_name") or event.get("away_team") or "")
-        score = 0.0
-        if home_key in home_aliases:
-            score += 2.0
-        if away_key in away_aliases:
-            score += 2.0
-        if home_key in away_aliases and away_key in home_aliases:
-            score += 1.0
-        try:
-            event_dt = datetime.fromisoformat(str(event.get("event_start_at"))[:19])
-            score += max(0.0, 1.0 - abs((event_dt - utc_dt).total_seconds()) / 10800)
-        except Exception:
-            pass
-        if score > best_score:
-            best = dict(event)
-            best_score = score
-
-    try:
-        for event in _cached_oddsfe_schedule_events(cursor, date_strs):
-            consider_event(event)
-
-        if allow_network and best_score < 4.0:
-            from backend.app.lottery.services.sync_service import _oddsfe_fetch_schedule
-
-            for date_str in date_strs:
-                for event in _oddsfe_fetch_schedule(date_str):
-                    event = dict(event)
-                    event.setdefault("_score_source", "oddsfe_schedule_api")
-                    consider_event(event)
-
-        if not best or best_score < 4.0:
-            return None
-        event_id = best.get("event_id")
-        if event_id:
-            details = _cached_oddsfe_event_detail(cursor, str(event_id))
-            if details:
-                best.update(details)
-                best["_score_source"] = "oddsfe_event_cache"
-        if allow_network and event_id:
-            from backend.app.lottery.services.sync_service import _oddsfe_fetch_score_details
-
-            details = _oddsfe_fetch_score_details(str(event_id))
-            if details:
-                best.update(details)
-                best["_score_source"] = "oddsfe_event_api"
-        return best
-    except Exception as exc:
-        logger.debug("world cup oddsfe bridge skipped: %s", exc)
-        return None
-
-
-def _apply_oddsfe_result_to_schedule_row(row: Dict[str, Any], event: Optional[Dict[str, Any]]) -> None:
-    if not event:
-        return
-    row["oddsfe_event_id"] = str(event.get("event_id") or row.get("oddsfe_event_id") or "")
-    row["oddsfe_status"] = event.get("event_status")
-    score_home = event.get("score_home", event.get("event_score_home"))
-    score_away = event.get("score_away", event.get("event_score_away"))
-    try:
-        home_ft = int(score_home)
-        away_ft = int(score_away)
-    except (TypeError, ValueError):
-        parsed = _parse_period_scores(event.get("score_details"))
-        if not parsed.get("ft"):
-            return
-        home_ft, away_ft = parsed["ft"]
-
-    parsed = _parse_period_scores(event.get("score_details"))
-    ht_home, ht_away = parsed.get("ht", (None, None))
-    row.update(_derive_result_labels(home_ft, away_ft, ht_home, ht_away))
-    row["match_status"] = "finished" if str(event.get("event_status") or "").upper() in {"FINISHED", "FT", "ENDED"} else row.get("match_status")
-    score_source = event.get("_score_source") or "oddsfe_event_api"
-    row["score_source"] = score_source
-    if score_source == "oddsfe_event_cache":
-        row["data_quality_note"] = (
-            "赛程占位：未伪造体彩赔率；赛果来自本地 oddsfe event detail 缓存，等待 sporttery/正式结果采集接管。"
-        )
-    elif score_source == "oddsfe_schedule_cache":
-        row["data_quality_note"] = (
-            "赛程占位：未伪造体彩赔率；赛果来自本地 oddsfe schedule 缓存，等待 sporttery/正式结果采集接管。"
-        )
-    else:
-        row["data_quality_note"] = (
-            "赛程占位：未伪造体彩赔率；赛果来自 oddsfe event API，等待 sporttery/正式结果采集接管。"
-        )
 
 
 def _apply_world_cup_time_correction(match: Dict[str, Any], schedule_index: Optional[Dict[str, Any]]) -> None:
@@ -867,11 +716,14 @@ def _apply_world_cup_time_correction(match: Dict[str, Any], schedule_index: Opti
     corrected_date = corrected_beijing_time[:10]
     corrected_time = corrected_beijing_time[11:19]
 
+    # Always preserve original lottery date for grouping, even if time already matches
+    if raw_match_date and raw_match_date != corrected_date:
+        match["source_match_date"] = raw_match_date
+        match["time_corrected"] = True
+
     if raw_beijing_time and raw_beijing_time[:16] != corrected_beijing_time[:16]:
         match["source_beijing_time"] = raw_beijing_time
-        match["source_match_date"] = raw_match_date
         match["source_match_time"] = raw_match_time
-        match["time_corrected"] = True
         match["data_quality_note"] = (
             "已按世界杯赛程 UTC→北京时间校正展示时间；体彩原始时间保留在 source_* 字段。"
         )
@@ -891,7 +743,9 @@ def _apply_world_cup_time_correction(match: Dict[str, Any], schedule_index: Opti
 
 
 def _display_match_date(match: Dict[str, Any]) -> str:
-    return str(match.get("beijing_time") or match.get("match_date") or "")[:10]
+    # Use original match_date for date grouping (lottery sell date),
+    # not corrected beijing_time which may shift to a different calendar day
+    return str(match.get("source_match_date") or match.get("match_date") or match.get("beijing_time") or "")[:10]
 
 
 def _now_beijing_naive() -> datetime:
@@ -944,94 +798,6 @@ def _status_from_beijing_time(
         return default_status
 
 
-def _world_cup_schedule_fallback(cursor, target_date: Optional[str], existing_matches: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Return schedule-only World Cup rows when lottery data is missing.
-
-    These rows are display fallbacks only: no odds, no results, no fake lottery issue number.
-    """
-    if not target_date:
-        return []
-    schedule_index = _world_cup_schedule_index()
-    if not schedule_index:
-        return []
-    context = schedule_index["context"]
-    service = schedule_index["service"]
-
-    existing_pairs = {
-        (
-            service._norm_name(item.get("home_team_cn") or ""),
-            service._norm_name(item.get("away_team_cn") or ""),
-            _display_match_date(item),
-        )
-        for item in existing_matches
-    }
-    # Also track occupied time slots to avoid duplicating resolved matches with TBD placeholders
-    existing_time_slots = set()
-    for item in existing_matches:
-        if _is_world_cup_match(item):
-            bt = str(item.get("beijing_time") or "")[:16]
-            md = _display_match_date(item)
-            if bt and md:
-                existing_time_slots.add((md, bt))
-
-    rows: List[Dict[str, Any]] = []
-    for item in context.get("matches", []):
-        if item.get("date") != target_date:
-            continue
-        home = item.get("home_team") or {}
-        away = item.get("away_team") or {}
-        home_cn = home.get("name_cn") or home.get("short_name") or home.get("name")
-        away_cn = away.get("name_cn") or away.get("short_name") or away.get("name")
-        if (service._norm_name(home_cn), service._norm_name(away_cn), target_date) in existing_pairs:
-            continue
-        # Skip if this time slot already has a WC lottery match (e.g., TBD placeholder vs resolved team)
-        time_text = (item.get("time") or "00:00")[:5]
-        beijing_time = item.get("beijing_time") or f"{target_date} {time_text}:00"
-        if (target_date, beijing_time[:16]) in existing_time_slots:
-            continue
-        match_date = beijing_time[:10]
-        match_time = beijing_time[11:19]
-        match_id = str(item.get("match_id") or "")
-        row = {
-            "lottery_match_id": f"wc2026_{match_id or target_date + '_' + str(len(rows) + 1)}",
-            "match_id": match_id or None,
-            "home_team_id": _lookup_team_id(cursor, home),
-            "away_team_id": _lookup_team_id(cursor, away),
-            "home_team_cn": home_cn,
-            "away_team_cn": away_cn,
-            "league_name_cn": "世界杯",
-            "match_num": f"WC{match_id[-3:]}" if match_id else "WC",
-            "match_date": match_date,
-            "match_time": match_time,
-            "beijing_time": beijing_time,
-            "sell_status": "scheduled",
-            "play_types": [],
-            "handicap_line": 0,
-            "oddsfe_event_id": None,
-            "has_analysis": False,
-            "match_status": _status_from_beijing_time(beijing_time, "scheduled", {
-                "league_name_cn": "世界杯",
-                "match_date": target_date,
-                "stage": item.get("stage"),
-                "world_cup_stage": item.get("stage"),
-            }),
-            "is_schedule_fallback": True,
-            "data_source": "world_cup_2026_schedule",
-            "data_quality_note": "赛程占位：按世界杯 UTC 赛程换算北京时间；未伪造体彩赔率或赛果，等待 sporttery/oddsfe 采集接管。",
-            "display_timezone": "Asia/Shanghai",
-            "time_basis": item.get("time_basis"),
-            "world_cup_source_date": item.get("source_date"),
-            "world_cup_source_time": item.get("source_time"),
-            "source_utc_date": item.get("utc_date"),
-            "world_cup_matchday": item.get("matchday"),
-            "world_cup_group": item.get("group"),
-        }
-        _apply_oddsfe_result_to_schedule_row(
-            row,
-            _oddsfe_match_for_world_cup(item, schedule_index, cursor=cursor, allow_network=False),
-        )
-        rows.append(row)
-    return rows
 
 
 def _safe_json_loads(value: Any, default: Any = None) -> Any:
@@ -1638,6 +1404,11 @@ async def get_lottery_matches(
             column_or_null(result_columns, 'bqc_result'),
             column_or_null(result_columns, 'rqspf_result'),
             column_or_null(result_columns, 'ou_result'),
+            column_or_null(result_columns, 'home_goals_90min'),
+            column_or_null(result_columns, 'away_goals_90min'),
+            column_or_null(result_columns, 'match_end_type'),
+            column_or_null(result_columns, 'penalty_home'),
+            column_or_null(result_columns, 'penalty_away'),
         ])
         result_order = []
         if 'updated_at' in result_columns:
@@ -1667,14 +1438,19 @@ async def get_lottery_matches(
                 'bf_result': row[7],
                 'bqc_result': row[8],
                 'rqspf_result': row[9],
-                'ou_result': row[10]
+                'ou_result': row[10],
+                'home_goals_90min': row[11],
+                'away_goals_90min': row[12],
+                'match_end_type': row[13],
+                'penalty_home': row[14],
+                'penalty_away': row[15],
             }
 
-        # 获取SPF/RQSPF赔率(最新一条)
+        # 获取SPF/RQSPF/OU赔率(最新一条)
         odds_map = {}
         cursor.execute("""
             SELECT lottery_match_id, play_type, odds_data FROM lottery_odds o1
-            WHERE play_type IN ('spf', 'rqspf')
+            WHERE play_type IN ('spf', 'rqspf', 'ou')
             AND update_time = (
                 SELECT MAX(update_time) FROM lottery_odds o2
                 WHERE o2.lottery_match_id = o1.lottery_match_id AND o2.play_type = o1.play_type
@@ -1720,6 +1496,11 @@ async def get_lottery_matches(
                 match['away_goals_ft'] = result['away_goals_ft']
                 match['home_goals_ht'] = result['home_goals_ht']
                 match['away_goals_ht'] = result['away_goals_ht']
+                match['home_goals_90min'] = result.get('home_goals_90min')
+                match['away_goals_90min'] = result.get('away_goals_90min')
+                match['match_end_type'] = result.get('match_end_type')
+                match['penalty_home'] = result.get('penalty_home')
+                match['penalty_away'] = result.get('penalty_away')
                 match['bf_result'] = result['bf_result']
                 # 已有结果的比赛标记为 finished
                 match['match_status'] = 'finished'
@@ -1729,48 +1510,91 @@ async def get_lottery_matches(
                 a_ft = result['away_goals_ft']
                 h_ht = result['home_goals_ht']
                 a_ht = result['away_goals_ht']
+                h_90 = result.get('home_goals_90min')
+                a_90 = result.get('away_goals_90min')
+                end_type = result.get('match_end_type') or 'FT'
                 handicap = match.get('handicap_line', 0) or 0
 
-                if h_ft is not None and a_ft is not None:
-                    # SPF
-                    spf_raw = result['spf_result']
-                    spf_map = {'3': '主胜', '1': '平局', '0': '客胜'}
-                    match['spf_result'] = spf_map.get(spf_raw, spf_raw)
+                # For SPF/BQC/OU: use 90min scores (AET/AP settle on 90min)
+                spf_h = h_90 if h_90 is not None else h_ft
+                spf_a = a_90 if a_90 is not None else a_ft
 
-                    # RQSPF: use goal_line from rqspf_odds for correct direction
-                    # goal_line: -2=主让2, +1=客让1; handicap_line方向不可靠
+                if h_ft is not None and a_ft is not None:
+                    # For AET/AP: derive SPF/BQC from 90min scores, not from DB spf_result
+                    if end_type in ('AET', 'AP') and h_90 is not None and a_90 is not None:
+                        spf_code = '3' if h_90 > a_90 else ('1' if h_90 == a_90 else '0')
+                    else:
+                        spf_code = result.get('spf_result') or ('3' if h_ft > a_ft else ('1' if h_ft == a_ft else '0'))
+                    spf_map = {'3': '主胜', '1': '平局', '0': '客胜'}
+                    match['spf_result'] = spf_map.get(spf_code, spf_code)
+
+                    # Score display for AET/AP: structured period data
+                    if end_type in ('AET', 'AP') and h_90 is not None and a_90 is not None:
+                        et_h = (h_ft - h_90) if (h_ft is not None and h_90 is not None) else None
+                        et_a = (a_ft - a_90) if (a_ft is not None and a_90 is not None) else None
+                        pen_h = result.get('penalty_home')
+                        pen_a = result.get('penalty_away')
+                        match['score_display'] = f"{h_90}-{a_90}"
+                        score_detail = {
+                            'regular': f"{h_90}-{a_90}",
+                            'ht': f"{h_ht}-{a_ht}" if h_ht is not None and a_ht is not None else None,
+                            'second_half': f"{h_90 - (h_ht or 0)}-{a_90 - (a_ht or 0)}" if h_ht is not None and a_ht is not None else None,
+                            'extra_time': f"{et_h}-{et_a}" if et_h is not None and et_a is not None else None,
+                            'aggregate': f"{h_ft}-{a_ft}",
+                            'end_type': end_type,
+                        }
+                        if pen_h is not None and pen_a is not None:
+                            score_detail['penalties'] = f"{pen_h}-{pen_a}"
+                        match['score_detail'] = score_detail
+                    else:
+                        match['score_display'] = f"{h_ft}-{a_ft}"
+                        match['score_detail'] = None
+
+                    # RQSPF: use 90min scores for AET/AP
                     rqspf_odds_data = match_odds.get('rqspf', {})
                     goal_line_str = rqspf_odds_data.get('goal_line', '') if rqspf_odds_data else ''
                     if goal_line_str:
                         try:
                             gl_val = float(goal_line_str)
-                            # goal_line=-2 → home_adj = h_ft + (-2) = h_ft - 2
-                            # goal_line=+1 → home_adj = h_ft + (+1) = h_ft + 1
-                            h_adj = h_ft + gl_val
+                            h_adj = spf_h + gl_val
                         except ValueError:
-                            h_adj = h_ft - handicap
+                            h_adj = spf_h - handicap
                     else:
-                        h_adj = h_ft - handicap
-                    if h_adj > a_ft:
+                        h_adj = spf_h - handicap
+                    if h_adj > spf_a:
                         match['rqspf_result'] = '让胜'
-                    elif h_adj == a_ft:
+                    elif h_adj == spf_a:
                         match['rqspf_result'] = '让平'
                     else:
                         match['rqspf_result'] = '让负'
 
-                    # BQC: derive from half-time/full-time when possible; otherwise use stored source code.
+                    # BQC: use 90min for FT direction, HT unchanged
                     if h_ht is not None and a_ht is not None:
                         ht_code = '3' if h_ht > a_ht else ('1' if h_ht == a_ht else '0')
-                        ft_code = '3' if h_ft > a_ft else ('1' if h_ft == a_ft else '0')
+                        ft_code = '3' if spf_h > spf_a else ('1' if spf_h == spf_a else '0')
                         match['bqc_result'] = _format_bqc_result(ht_code + ft_code)
                     elif result.get('bqc_result'):
                         match['bqc_result'] = _format_bqc_result(result['bqc_result'])
 
-                    # 大小球赛果 — 优先用lottery_results已计算的ou_result
-                    if result.get('ou_result'):
+                    # 大小球赛果 — AET/AP用90min进球数, FT用DB值或重新计算
+                    if end_type in ('AET', 'AP') and h_90 is not None and a_90 is not None:
+                        from backend.app.lottery.services.ou_calculator import compute_ou_result
+                        total_90 = h_90 + a_90
+                        ou_line = 2.5
+                        # Try to get actual O/U line from odds
+                        ou_odds = match_odds.get('ou', {})
+                        if ou_odds:
+                            goal_line = ou_odds.get('goal_line', '')
+                            if goal_line:
+                                try:
+                                    ou_line = float(goal_line)
+                                except ValueError:
+                                    pass
+                        match['ou_result'] = compute_ou_result(total_90, ou_line)
+                    elif result.get('ou_result'):
                         match['ou_result'] = result['ou_result']
                     else:
-                        total_goals = h_ft + a_ft
+                        total_goals = spf_h + spf_a
                         from backend.app.lottery.services.ou_calculator import compute_ou_result
                         match['ou_result'] = compute_ou_result(total_goals, 2.5)
                 else:
@@ -1872,7 +1696,6 @@ async def get_lottery_matches(
             _align_ou_result_to_prediction(match)
 
         if date and not play_type:
-            matches.extend(_world_cup_schedule_fallback(cursor, date, matches))
             matches.sort(key=lambda item: item.get('beijing_time') or f"{item.get('match_date', '')} {item.get('match_time', '')}")
 
         # Add computed analysis_status for each match
@@ -3518,6 +3341,261 @@ async def get_accuracy_stats(
             **result
         }
 
+    finally:
+        conn.close()
+
+
+@router.get("/automation-timeline")
+async def get_automation_timeline(hours: int = Query(24, ge=1, le=168)):
+    """最近N小时任务执行时间线 — 从真实运行表聚合"""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        cutoff_sql = "datetime('now', ?)"
+        cutoff_arg = f"-{hours} hours"
+        events = []
+
+        # 1. 日循环节点 (daily_cycle_state)
+        try:
+            cursor.execute(f"""
+                SELECT date, current_node, status, started_at, updated_at, error_message,
+                       perceive_result, collect_result, intel_result, classify_result,
+                       analyze_result, push_result, learn_result
+                FROM daily_cycle_state
+                WHERE COALESCE(updated_at, started_at) IS NOT NULL
+                  AND COALESCE(updated_at, started_at) >= {cutoff_sql}
+                ORDER BY COALESCE(updated_at, started_at) DESC
+                LIMIT 50
+            """, (cutoff_arg,))
+            for row in cursor.fetchall():
+                r = dict(row)
+                ts = (r.get('updated_at') or r.get('started_at') or '')[:19]
+                events.append({
+                    'id': f"cycle_{r.get('date', '')}",
+                    'name': f"日循环 · {r.get('current_node', '?')}",
+                    'status': r.get('status', ''),
+                    'time': ts,
+                    'duration': None,
+                    'category': 'cycle',
+                    'detail': r.get('date', ''),
+                    'error': r.get('error_message') or '',
+                })
+        except Exception as e:
+            logger.warning('timeline daily_cycle_state查询失败: %s', e)
+
+        # 2. 采集任务 (collection_runs)
+        try:
+            cursor.execute(f"""
+                SELECT run_id, trigger_source, run_type, match_date, status,
+                       started_at, finished_at, error, summary_json
+                FROM collection_runs
+                WHERE started_at IS NOT NULL
+                  AND started_at >= {cutoff_sql}
+                ORDER BY started_at DESC
+                LIMIT 80
+            """, (cutoff_arg,))
+            for row in cursor.fetchall():
+                r = dict(row)
+                duration = None
+                if r.get('started_at') and r.get('finished_at'):
+                    try:
+                        s = datetime.fromisoformat(r['started_at'])
+                        e = datetime.fromisoformat(r['finished_at'])
+                        duration = round((e - s).total_seconds(), 1)
+                    except Exception:
+                        pass
+                events.append({
+                    'id': r.get('run_id', ''),
+                    'name': f"采集 · {r.get('run_type', '?')}",
+                    'status': r.get('status', ''),
+                    'time': (r.get('started_at') or '')[:19],
+                    'duration': duration,
+                    'category': 'collect',
+                    'detail': f"{r.get('trigger_source', '')} · {r.get('match_date', '')}",
+                    'error': r.get('error') or '',
+                })
+        except Exception as e:
+            logger.warning('timeline collection_runs查询失败: %s', e)
+
+        # 3. 情报任务 (intelligence_runs)
+        try:
+            cursor.execute(f"""
+                SELECT run_id, run_date, trigger_source, status,
+                       started_at, finished_at, error, summary_json
+                FROM intelligence_runs
+                WHERE started_at IS NOT NULL
+                  AND started_at >= {cutoff_sql}
+                ORDER BY started_at DESC
+                LIMIT 50
+            """, (cutoff_arg,))
+            for row in cursor.fetchall():
+                r = dict(row)
+                duration = None
+                if r.get('started_at') and r.get('finished_at'):
+                    try:
+                        s = datetime.fromisoformat(r['started_at'])
+                        e = datetime.fromisoformat(r['finished_at'])
+                        duration = round((e - s).total_seconds(), 1)
+                    except Exception:
+                        pass
+                events.append({
+                    'id': r.get('run_id', ''),
+                    'name': f"情报 · {r.get('run_date', '?')}",
+                    'status': r.get('status', ''),
+                    'time': (r.get('started_at') or '')[:19],
+                    'duration': duration,
+                    'category': 'intel',
+                    'detail': r.get('trigger_source', ''),
+                    'error': r.get('error') or '',
+                })
+        except Exception as e:
+            logger.warning('timeline intelligence_runs查询失败: %s', e)
+
+        # 按时间倒序合并
+        events.sort(key=lambda x: x.get('time', ''), reverse=True)
+        return {'events': events[:100], 'hours': hours, 'total': len(events)}
+    except Exception as e:
+        return {'events': [], 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@router.get("/discovered-segments")
+async def get_discovered_segments():
+    """获取自动挖掘的场景偏差segment"""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT param_name, old_value, new_value, change_reason, sample_size, changed_at
+            FROM model_params_history
+            WHERE param_name LIKE 'segment:%'
+            ORDER BY changed_at DESC
+            LIMIT 20
+        """)
+        segments = []
+        for row in cursor.fetchall():
+            r = dict(row)
+            # 解析 segment key
+            key = r.get('param_name', '').replace('segment:', '')
+            reason = r.get('change_reason', '')
+            segments.append({
+                'key': key,
+                'model_accuracy': r.get('new_value'),
+                'odds_accuracy': r.get('old_value'),
+                'sample': r.get('sample_size', 0),
+                'gap': (r.get('new_value') or 0) - (r.get('old_value') or 0),
+                'reason': reason,
+                'changed_at': r.get('changed_at'),
+            })
+        return {'segments': segments}
+    except Exception as e:
+        return {'segments': [], 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@router.get("/push-history")
+async def get_push_history(limit: int = Query(10, ge=1, le=50)):
+    """获取推送历史（含Agent早报）"""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        # 确保表存在
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS push_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                push_date TEXT NOT NULL,
+                mode TEXT,
+                predictions_count INTEGER,
+                top3_json TEXT,
+                stop_loss_json TEXT,
+                roi_summary_json TEXT,
+                agent_report_text TEXT,
+                agent_decision_json TEXT,
+                channels_json TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        cursor.execute("""
+            SELECT id, push_date, mode, predictions_count,
+                   agent_report_text, roi_summary_json, stop_loss_json,
+                   agent_decision_json, created_at
+            FROM push_history
+            ORDER BY created_at DESC
+            LIMIT ?
+        """, (limit,))
+        rows = [dict(r) for r in cursor.fetchall()]
+        return {'history': rows}
+    except Exception as e:
+        return {'history': [], 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@router.get("/learning-history")
+async def get_learning_history(limit: int = Query(20, ge=1, le=200)):
+    """模型参数变更历史"""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, model_version, param_name, old_value, new_value,
+                   change_reason, accuracy_before, accuracy_after, sample_size, changed_at
+            FROM model_params_history
+            ORDER BY changed_at DESC
+            LIMIT ?
+        """, (limit,))
+        changes = [dict(r) for r in cursor.fetchall()]
+        return {'changes': changes}
+    except Exception as e:
+        return {'changes': [], 'error': str(e)}
+    finally:
+        conn.close()
+
+
+@router.get("/roi-trend")
+async def get_roi_trend(days: int = Query(30, ge=1, le=180)):
+    """ROI时序数据（按天）"""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT DATE(created_at) as d,
+                   COUNT(*) as bets,
+                   SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) as wins,
+                   SUM(profit) as pnl,
+                   SUM(stake) as staked
+            FROM bet_records
+            WHERE created_at >= date('now', ?)
+            GROUP BY DATE(created_at)
+            ORDER BY d
+        """, (f'-{days} days',))
+        rows = [dict(r) for r in cursor.fetchall()]
+        trend = []
+        cum_pnl = 0
+        for r in rows:
+            staked = r.get('staked') or 0
+            pnl = r.get('pnl') or 0
+            cum_pnl += pnl
+            roi = (pnl / staked * 100) if staked > 0 else 0
+            cum_roi = (cum_pnl / sum(x.get('staked') or 0 for x in rows[:rows.index(r)+1]) * 100) if any(x.get('staked') for x in rows[:rows.index(r)+1]) else 0
+            trend.append({
+                'date': r.get('d'),
+                'bets': r.get('bets'),
+                'wins': r.get('wins'),
+                'pnl': round(pnl, 2),
+                'roi': round(roi, 2),
+                'cum_roi': round(cum_roi, 2),
+            })
+        return {'trend': trend}
+    except Exception as e:
+        return {'trend': [], 'error': str(e)}
     finally:
         conn.close()
 

@@ -804,11 +804,19 @@
 
               <template v-if="match.match_status === 'finished' && match.home_goals_ft != null">
 
-                <span class="mc-score">{{ match.home_goals_ft }}-{{ match.away_goals_ft }}</span>
-                <span v-if="match.home_goals_ht != null && match.away_goals_ht != null" class="mc-ht-score">
+                <span class="mc-score">{{ match.score_display || (match.home_goals_ft + '-' + match.away_goals_ft) }}</span>
+                <span v-if="match.score_detail" class="mc-ht-score">
+                  <template v-if="match.score_detail.ht">{{ match.score_detail.ht }}</template>
+                  <template v-if="match.score_detail.second_half"> {{ match.score_detail.second_half }}</template>
+                  <template v-if="match.score_detail.extra_time"> 加时{{ match.score_detail.extra_time }}</template>
+                  <template v-if="match.score_detail.penalties"> 点球{{ match.score_detail.penalties }}</template>
+                </span>
+                <span v-else-if="match.home_goals_ht != null && match.away_goals_ht != null" class="mc-ht-score">
                   {{ match.home_goals_ht }}-{{ match.away_goals_ht }}
                   {{ (match.home_goals_ft - match.home_goals_ht) }}-{{ (match.away_goals_ft - match.away_goals_ht) }}
                 </span>
+                <span v-else-if="match.match_end_type === 'AET'" class="mc-ft-tag">AET</span>
+                <span v-else-if="match.match_end_type === 'AP'" class="mc-ft-tag">AP</span>
                 <span v-else class="mc-ft-tag">FT</span>
 
               </template>
