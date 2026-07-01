@@ -148,6 +148,33 @@
             <div v-else class="empty">无熔断</div>
           </div>
 
+          <div class="panel-card wide">
+            <h3>场景×玩法准确率热力图</h3>
+            <div class="heatmap-wrap" v-if="sceneAccuracy.length">
+              <div class="heatmap-table">
+                <div class="heatmap-row heatmap-header">
+                  <div class="hm-cell hm-label">场景 / 玩法</div>
+                  <div class="hm-cell" v-for="p in playTypes" :key="p">{{ p }}</div>
+                  <div class="hm-cell hm-total">整体</div>
+                </div>
+                <div v-for="sc in sceneAccuracy" :key="sc.scenario" class="heatmap-row">
+                  <div class="hm-cell hm-label">{{ scenarioLabel(sc.scenario) }}</div>
+                  <div v-for="p in playTypes" :key="p" class="hm-cell" :class="heatClass(sc, p)">
+                    {{ heatValue(sc, p) }}
+                  </div>
+                  <div class="hm-cell hm-total">{{ sc.overall_accuracy?.toFixed(1) }}%</div>
+                </div>
+              </div>
+              <div class="heatmap-legend">
+                <span class="leg-item"><span class="leg-dot strong"></span>强项(≥基线+5pp)</span>
+                <span class="leg-item"><span class="leg-dot normal"></span>正常</span>
+                <span class="leg-item"><span class="leg-dot weak"></span>弱项(≤基线-5pp)</span>
+                <span class="leg-item leg-baseline">基线 {{ baseline }}%</span>
+              </div>
+            </div>
+            <div v-else class="empty">暂无场景准确率数据</div>
+          </div>
+
           <div class="panel-card">
             <h3>发现的场景偏差</h3>
             <div class="segments-list" v-if="discoveredSegments.length">
@@ -235,6 +262,9 @@ const roiSummary = ref(null)
 const recentBets = ref([])
 const discoveredSegments = ref([])
 const pushHistory = ref([])
+const sceneAccuracy = ref([])
+const baseline = ref(0)
+const playTypes = ['spf', 'rqspf', 'ou', 'bqc', 'bf']
 
 const tabs = computed(() => [
   { key: 'live', label: '实时运转', badge: liveCards.value.find(c => c.key === 'running')?.value || '', badgeClass: 'run' },
@@ -326,11 +356,33 @@ const renderMarkdown = (text) => {
     .replace(/\n/g, '<br>')
 }
 
+const scenarioLabel = (sc) => {
+  const map = { friendly_intl: '友谊赛', international_cup: '国际杯赛', league: '联赛' }
+  return map[sc] || sc
+}
+
+const _playInScenario = (sc, p) => {
+  if (!sc || !sc.plays) return null
+  return sc.plays.find(x => x.play_type === p) || null
+}
+
+const heatClass = (sc, p) => {
+  const play = _playInScenario(sc, p)
+  if (!play) return 'hm-empty'
+  return 'hm-' + (play.status || 'normal')
+}
+
+const heatValue = (sc, p) => {
+  const play = _playInScenario(sc, p)
+  if (!play) return '—'
+  return play.accuracy?.toFixed(1) + '%'
+}
+
 const loadAll = async () => {
   loading.value = true
   error.value = ''
   try {
-    const [dash, model, sched, tl, lh, rt, bets, segs, ph] = await Promise.all([
+    const [dash, model, sched, tl, lh, rt, bets, segs, ph, sa] = await Promise.all([
       fetch('/api/v1/lottery/automation-dashboard').then(r => r.json()),
       fetch('/api/v1/lottery/model-status').then(r => r.json()),
       fetch('/api/scheduler/status').then(r => r.json()),
@@ -340,6 +392,7 @@ const loadAll = async () => {
       fetch('/api/v1/lottery/roi').then(r => r.json()).catch(() => ({})),
       fetch('/api/v1/lottery/discovered-segments').then(r => r.json()).catch(() => ({ segments: [] })),
       fetch('/api/v1/lottery/push-history?limit=3').then(r => r.json()).catch(() => ({ history: [] })),
+      fetch('/api/v1/lottery/scene-accuracy?days=30').then(r => r.json()).catch(() => ({ scenarios: [] })),
     ])
     dashboardData.value = dash
     modelStatus.value = model
@@ -351,6 +404,8 @@ const loadAll = async () => {
     recentBets.value = bets.recent_bets || []
     discoveredSegments.value = segs.segments || []
     pushHistory.value = ph.history || []
+    sceneAccuracy.value = sa.scenarios || []
+    baseline.value = sa.baseline || 0
   } catch (e) {
     error.value = '加载失败: ' + e.message
   } finally {
@@ -489,4 +544,25 @@ onMounted(loadAll)
 .agent-report :deep(h4) { color: #60a5fa; margin: 10px 0 4px; font-size: 13px; }
 .agent-report :deep(strong) { color: #e2e8f0; }
 .agent-report :deep(blockquote) { border-left: 3px solid #f59e0b; padding-left: 8px; color: #fbbf24; margin: 4px 0; }
+
+/* 场景准确率热力图 */
+.heatmap-wrap { display: flex; flex-direction: column; gap: 10px; }
+.heatmap-table { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.heatmap-row { display: grid; grid-template-columns: 100px repeat(5, 1fr) 70px; gap: 2px; }
+.heatmap-header { font-weight: 600; color: #9ca3af; }
+.heatmap-header .hm-cell { background: transparent; padding: 4px; text-align: center; }
+.hm-cell { padding: 8px 4px; text-align: center; border-radius: 3px; background: #1e293b; color: #e2e8f0; }
+.hm-cell.hm-label { text-align: left; font-weight: 500; color: #cbd5e1; background: transparent; }
+.hm-cell.hm-total { font-weight: 600; background: #0f172a; color: #94a3b8; }
+.hm-cell.hm-empty { background: #0f172a; color: #475569; }
+.hm-cell.hm-strong { background: rgba(16, 185, 129, 0.25); color: #6ee7b7; font-weight: 600; }
+.hm-cell.hm-normal { background: rgba(100, 116, 139, 0.2); color: #cbd5e1; }
+.hm-cell.hm-weak { background: rgba(239, 68, 68, 0.25); color: #fca5a5; font-weight: 600; }
+.heatmap-legend { display: flex; gap: 14px; font-size: 11px; color: #9ca3af; flex-wrap: wrap; }
+.leg-item { display: flex; align-items: center; gap: 4px; }
+.leg-dot { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.leg-dot.strong { background: rgba(16, 185, 129, 0.6); }
+.leg-dot.normal { background: rgba(100, 116, 139, 0.5); }
+.leg-dot.weak { background: rgba(239, 68, 68, 0.6); }
+.leg-baseline { margin-left: auto; color: #6b7280; }
 </style>

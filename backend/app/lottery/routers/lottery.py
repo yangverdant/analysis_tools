@@ -3497,6 +3497,73 @@ async def get_discovered_segments():
         conn.close()
 
 
+@router.get("/scene-accuracy")
+async def get_scene_accuracy(days: int = Query(30, ge=1, le=180)):
+    """场景×玩法准确率矩阵 — 驾驶舱热力图数据源
+
+    返回每个 (scenario_type, play_type) 组合的准确率、样本数、与基线差距。
+    用于在驾驶舱"学习进度"标签页展示热力图。
+    """
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        cursor.execute("""
+            SELECT scenario_type, play_type,
+                   COUNT(*) as sample,
+                   SUM(CASE WHEN is_correct=1 THEN 1 ELSE 0 END) as correct,
+                   ROUND(AVG(CASE WHEN is_correct=1 THEN 1.0 ELSE 0 END)*100, 1) as accuracy
+            FROM lottery_validation
+            WHERE validated_at >= datetime('now', ?)
+              AND scenario_type IS NOT NULL
+              AND play_type IS NOT NULL
+            GROUP BY scenario_type, play_type
+            ORDER BY scenario_type, sample DESC
+        """, (f'-{days} days',))
+        rows = [dict(r) for r in cursor.fetchall()]
+
+        # 整体基线
+        cursor.execute("""
+            SELECT ROUND(AVG(CASE WHEN is_correct=1 THEN 1.0 ELSE 0 END)*100, 1) as baseline
+            FROM lottery_validation
+            WHERE validated_at >= datetime('now', ?)
+        """, (f'-{days} days',))
+        baseline_row = cursor.fetchone()
+        baseline = baseline_row['baseline'] if baseline_row else 0
+
+        # 按 scenario 汇总
+        scenarios = {}
+        for r in rows:
+            sc = r['scenario_type']
+            if sc not in scenarios:
+                scenarios[sc] = {'scenario': sc, 'plays': [], 'total_sample': 0, 'total_correct': 0}
+            r['gap_vs_baseline'] = round(r['accuracy'] - baseline, 1)
+            r['status'] = (
+                'strong' if r['accuracy'] >= baseline + 5 and r['sample'] >= 10 else
+                'weak' if r['accuracy'] <= baseline - 5 and r['sample'] >= 10 else
+                'normal'
+            )
+            scenarios[sc]['plays'].append(r)
+            scenarios[sc]['total_sample'] += r['sample']
+            scenarios[sc]['total_correct'] += r['correct']
+
+        for sc in scenarios.values():
+            sc['overall_accuracy'] = round(
+                sc['total_correct'] / sc['total_sample'] * 100, 1
+            ) if sc['total_sample'] else 0
+
+        return {
+            'baseline': baseline,
+            'days': days,
+            'scenarios': list(scenarios.values()),
+            'total_samples': sum(r['sample'] for r in rows),
+        }
+    except Exception as e:
+        return {'baseline': 0, 'scenarios': [], 'error': str(e)}
+    finally:
+        conn.close()
+
+
 @router.get("/push-history")
 async def get_push_history(limit: int = Query(10, ge=1, le=50)):
     """获取推送历史（含Agent早报）"""
