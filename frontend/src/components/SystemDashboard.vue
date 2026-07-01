@@ -88,7 +88,13 @@
           <div class="panel-card wide">
             <h3>30天准确率走势</h3>
             <div class="chart-wrap" v-if="accuracyTrend.length">
-              <MultiLineChart :data="accuracyTrend" :height="240" />
+              <MultiLineChart
+                :lines="accuracyLines"
+                :yMax="100"
+                :yLabels="[0, 25, 50, 75, 100]"
+                :xLabels="accuracyXLabels"
+                :height="240"
+              />
             </div>
             <div v-else class="empty">暂无趋势数据</div>
           </div>
@@ -195,7 +201,13 @@
           <div class="panel-card wide">
             <h3>ROI走势</h3>
             <div class="chart-wrap" v-if="roiTrend.length">
-              <MultiLineChart :data="roiTrend" :height="240" />
+              <MultiLineChart
+                :lines="roiLines"
+                :yMax="roiYMax"
+                :yLabels="roiYLabels"
+                :xLabels="roiXLabels"
+                :height="240"
+              />
             </div>
             <div v-else class="empty">暂无ROI数据</div>
           </div>
@@ -321,9 +333,8 @@ const playTargets = computed(() => {
   }))
 })
 
-const accuracyTrend = computed(() => {
-  return roiTrend.value.length ? [] : []
-})
+const accuracyTrendData = ref([])
+const accuracyTrend = computed(() => accuracyTrendData.value)
 
 const circuitEvents = computed(() => {
   return (learningHistory.value || []).filter(c => (c.change_reason || '').includes('熔断'))
@@ -342,6 +353,41 @@ const latestAgentReport = computed(() => {
   if (!pushHistory.value.length) return ''
   const latest = pushHistory.value[0]
   return latest.agent_report_text || ''
+})
+
+// 准确率趋势图适配
+const accuracyLines = computed(() => {
+  if (!accuracyTrend.value.length) return []
+  return [{
+    data: accuracyTrend.value.map(p => p.accuracy || 0),
+    color: '#10b981'
+  }]
+})
+const accuracyXLabels = computed(() => {
+  return accuracyTrend.value.map(p => (p.period || '').slice(5))
+})
+
+// ROI趋势图适配
+const roiLines = computed(() => {
+  if (!roiTrend.value.length) return []
+  return [
+    { data: roiTrend.value.map(p => p.roi || 0), color: '#3b82f6' },
+    { data: roiTrend.value.map(p => p.cum_roi || 0), color: '#f59e0b' }
+  ]
+})
+const roiYMax = computed(() => {
+  if (!roiTrend.value.length) return 100
+  const vals = roiTrend.value.flatMap(p => [p.roi || 0, p.cum_roi || 0])
+  const max = Math.max(...vals, 50)
+  const min = Math.min(...vals, -50)
+  return Math.max(Math.abs(max), Math.abs(min), 50)
+})
+const roiYLabels = computed(() => {
+  const m = roiYMax.value
+  return [Math.round(-m), Math.round(-m/2), 0, Math.round(m/2), Math.round(m)]
+})
+const roiXLabels = computed(() => {
+  return roiTrend.value.map(p => (p.date || '').slice(5))
 })
 
 const renderMarkdown = (text) => {
@@ -382,7 +428,7 @@ const loadAll = async () => {
   loading.value = true
   error.value = ''
   try {
-    const [dash, model, sched, tl, lh, rt, bets, segs, ph, sa] = await Promise.all([
+    const [dash, model, sched, tl, lh, rt, bets, segs, ph, sa, at] = await Promise.all([
       fetch('/api/v1/lottery/automation-dashboard').then(r => r.json()),
       fetch('/api/v1/lottery/model-status').then(r => r.json()),
       fetch('/api/scheduler/status').then(r => r.json()),
@@ -393,6 +439,7 @@ const loadAll = async () => {
       fetch('/api/v1/lottery/discovered-segments').then(r => r.json()).catch(() => ({ segments: [] })),
       fetch('/api/v1/lottery/push-history?limit=3').then(r => r.json()).catch(() => ({ history: [] })),
       fetch('/api/v1/lottery/scene-accuracy?days=30').then(r => r.json()).catch(() => ({ scenarios: [] })),
+      fetch('/api/v1/lottery/accuracy-trend?days=30').then(r => r.json()).catch(() => ({ trend: [] })),
     ])
     dashboardData.value = dash
     modelStatus.value = model
@@ -406,6 +453,7 @@ const loadAll = async () => {
     pushHistory.value = ph.history || []
     sceneAccuracy.value = sa.scenarios || []
     baseline.value = sa.baseline || 0
+    accuracyTrendData.value = at.trend || []
   } catch (e) {
     error.value = '加载失败: ' + e.message
   } finally {
