@@ -10,6 +10,7 @@
 import json
 import logging
 import sqlite3
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ def record_segment_discovery(conn, segment: dict) -> None:
             INSERT INTO model_params_history
             (model_version, param_name, old_value, new_value, change_reason,
              accuracy_before, accuracy_after, sample_size, changed_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             'segment_discovery',
             f"segment:{segment['key']}",
@@ -119,12 +120,13 @@ def record_segment_discovery(conn, segment: dict) -> None:
             segment['baseline_accuracy'],
             segment['segment_accuracy'],
             segment['sample'],
+            datetime.utcnow().isoformat(),
         ))
         conn.commit()
         logger.info('segment发现已记录: %s (gap=%+.1f%%)',
                     segment['key'], segment['gap'] * 100)
     except Exception as e:
-        logger.debug('记录segment失败: %s', e)
+        logger.warning('记录segment失败: %s', e)
 
 
 def run_segment_discovery(db_path: str) -> dict:
