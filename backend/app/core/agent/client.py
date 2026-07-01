@@ -106,24 +106,43 @@ class AnalystAgent:
         self._backend = None  # 'anthropic' or 'openai'
 
     def _get_backend(self) -> str:
-        """检测可用后端: anthropic优先, openai(deepseek)备选"""
+        """检测可用后端: anthropic优先, openai(deepseek)备选
+
+        支持Anthropic兼容中转(如iFlytek MaaS), 通过config.yaml配置:
+          anthropic:
+            api_key: <key>
+            base_url: https://maas-coding-api.cn-huabei-1.xf-yun.com/anthropic
+            model: astron-code-latest
+        """
         if self._backend:
             return self._backend
 
-        # 尝试Anthropic
+        # 尝试Anthropic(或兼容中转)
         api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key or api_key == "ANTHROPIC_API_KEY_PLACEHOLDER":
-            try:
-                _, keys = _load_config()
-                api_key = keys.get("anthropic", {}).get("api_key", "")
-            except Exception:
-                pass
+        base_url = os.environ.get("ANTHROPIC_BASE_URL", "")
+        model_override = os.environ.get("ANTHROPIC_MODEL", "")
+        try:
+            _, keys = _load_config()
+            anth_cfg = keys.get("anthropic", {}) if isinstance(keys.get("anthropic", {}), dict) else {}
+            if not api_key or api_key == "ANTHROPIC_API_KEY_PLACEHOLDER":
+                api_key = anth_cfg.get("api_key", "")
+            if not base_url:
+                base_url = anth_cfg.get("base_url", "")
+            if not model_override:
+                model_override = anth_cfg.get("model", "")
+        except Exception:
+            pass
 
         if api_key and api_key != "ANTHROPIC_API_KEY_PLACEHOLDER":
             try:
-                self._anthropic_client = anthropic.Anthropic(api_key=api_key)
+                client_kwargs = {"api_key": api_key}
+                if base_url:
+                    client_kwargs["base_url"] = base_url
+                self._anthropic_client = anthropic.Anthropic(**client_kwargs)
                 self._backend = "anthropic"
-                logger.info("Agent后端: Anthropic")
+                self._anthropic_model_override = model_override or None
+                label = f"Anthropic({'中转' if base_url else '官方'}, model={model_override or '默认'})"
+                logger.info("Agent后端: %s", label)
                 return "anthropic"
             except Exception as e:
                 logger.warning(f"Anthropic初始化失败: {e}")
@@ -171,8 +190,13 @@ class AnalystAgent:
 
     def _run_anthropic(self, prompt: str, system: str, model: str,
                        max_tokens: int, use_tools: bool) -> dict:
-        """Anthropic后端调用"""
-        model_id = "claude-haiku-4-5-20251001" if model == "fast" else "claude-sonnet-4-6"
+        """Anthropic后端调用(支持兼容中转的model override)"""
+        # 如果配置了model override(中转API), 统一用该model; 否则按fast/strong选
+        override = getattr(self, "_anthropic_model_override", None)
+        if override:
+            model_id = override
+        else:
+            model_id = "claude-haiku-4-5-20251001" if model == "fast" else "claude-sonnet-4-6"
         system_text = system or load_agent_prompt("default")
         tools = AGENT_TOOLS_ANTHROPIC if use_tools else None
 

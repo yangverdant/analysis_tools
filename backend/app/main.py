@@ -620,8 +620,8 @@ async def cycle_run(mode: str):
         process = subprocess.Popen(
             [sys.executable, '-m', 'backend.app.core.daily_runner', '--mode', mode],
             cwd=os.path.join(os.path.dirname(__file__), '..', '..'),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
         )
         return {"success": True, "mode": mode, "pid": process.pid, "status": "started"}
     except Exception as e:

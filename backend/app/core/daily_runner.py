@@ -184,15 +184,27 @@ def run_mode(mode: str, db_path: str = None):
     elif mode == 'collect':
         state.current_node = 'collect'
         machine.run_cycle(state, stop_at='classify')
+    elif mode == 'intel':
+        state.current_node = 'intel'
+        machine.run_cycle(state, stop_at='classify')
+    elif mode == 'classify':
+        state.current_node = 'classify'
+        machine.run_cycle(state, stop_at='analyze')
     elif mode == 'analyze':
         state.current_node = 'analyze'
         machine.run_cycle(state, stop_at='push')
+    elif mode == 'push':
+        state.current_node = 'push'
+        machine.run_cycle(state, stop_at='clv_update')
     elif mode == 'clv':
         state.current_node = 'clv_update'
         machine.run_cycle(state, stop_at='validate')
     elif mode == 'validate':
         state.current_node = 'validate'
         machine.run_cycle(state, stop_at='learn')
+    elif mode == 'learn':
+        state.current_node = 'learn'
+        machine.run_cycle(state, stop_at=None)
     elif mode == 'morning':
         # 完整上午: perceive → collect → ... → push → clv_update
         machine.run_cycle(state)
@@ -211,7 +223,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='足球分析日循环')
     parser.add_argument('--mode', default='perceive',
-                        choices=['perceive', 'collect', 'analyze', 'clv', 'validate', 'morning', 'full'])
+                        choices=['perceive', 'collect', 'intel', 'classify', 'analyze', 'push', 'clv', 'validate', 'learn', 'morning', 'full'])
     parser.add_argument('--db', default=None, help='数据库路径')
     args = parser.parse_args()
 
