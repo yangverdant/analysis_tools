@@ -3667,6 +3667,60 @@ async def get_roi_trend(days: int = Query(30, ge=1, le=180)):
         conn.close()
 
 
+@router.get("/roi")
+async def get_roi_summary():
+    """ROI概况 — 7d/30d/all + 近期结算记录"""
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    try:
+        def _summary(days):
+            if days is None:
+                where = "WHERE profit IS NOT NULL"
+            else:
+                where = f"WHERE created_at >= date('now', '-{days} days') AND profit IS NOT NULL"
+            row = cursor.execute(f"""
+                SELECT COUNT(*) as matches,
+                       SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END) as wins,
+                       COALESCE(SUM(profit), 0) as profit,
+                       COALESCE(SUM(stake), 0) as staked
+                FROM bet_records {where}
+            """).fetchone()
+            matches = row['matches'] or 0
+            wins = row['wins'] or 0
+            profit = row['profit'] or 0
+            staked = row['staked'] or 0
+            roi = (profit / staked * 100) if staked > 0 else 0
+            return {
+                'matches': matches,
+                'wins': wins,
+                'profit': round(profit, 2),
+                'roi': f'{roi:.1f}%',
+            }
+
+        summary = {
+            '7d': _summary(7),
+            '30d': _summary(30),
+            'all': _summary(None),
+        }
+
+        cursor.execute("""
+            SELECT id, lottery_match_id, play_type, selection, odds,
+                   stake, profit, result, created_at
+            FROM bet_records
+            WHERE profit IS NOT NULL
+            ORDER BY created_at DESC
+            LIMIT 10
+        """)
+        recent = [dict(r) for r in cursor.fetchall()]
+
+        return {'summary': summary, 'recent_bets': recent}
+    except Exception as e:
+        return {'summary': {}, 'recent_bets': [], 'error': str(e)}
+    finally:
+        conn.close()
+
+
 @router.get("/model-status")
 async def get_model_status():
     """当前模型版本、权重、学习历史和gate状态"""
