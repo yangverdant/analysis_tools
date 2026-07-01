@@ -69,6 +69,7 @@
 
         <!-- 主页面组件切换 -->
         <LotteryCenter v-else-if="currentPage === '体彩中心'" />
+        <SystemDashboard v-else-if="currentPage === '驾驶舱'" />
         <DataCenter v-else-if="currentPage === '数据中心'" />
         <DataView v-else-if="currentPage === '数据查看'" />
         <Settings v-else-if="currentPage === '设置'" />
@@ -90,6 +91,7 @@ import DataView from './components/DataView.vue'
 import Settings from './components/Settings.vue'
 import DataCenter from './components/DataCenter.vue'
 import LotteryCenter from './components/LotteryCenter.vue'
+import SystemDashboard from './components/SystemDashboard.vue'
 
 // 图标组件 - 使用 defineComponent 包装
 const createIcon = (name, classStr, paths) => defineComponent({
@@ -184,6 +186,7 @@ export default {
     Settings,
     DataCenter,
     LotteryCenter,
+    SystemDashboard,
     HomeIcon,
     ActivityIcon,
     DatabaseIcon,
@@ -207,6 +210,7 @@ export default {
     const syncStatus = ref(null)
 
     const navItems = [
+      { icon: 'ActivityIcon', label: '驾驶舱' },
       { icon: 'LotteryIcon', label: '体彩中心' },
       { icon: 'DatabaseIcon', label: '数据中心' },
       { icon: 'DatabaseIcon', label: '数据查看' },

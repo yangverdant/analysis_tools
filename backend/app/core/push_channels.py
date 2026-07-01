@@ -66,16 +66,25 @@ def send_serverchan(title: str, content: str) -> bool:
 
 
 def format_daily_push(date: str, mode: str, predictions: list,
-                      top3: list, stop_loss: dict, roi_summary: dict) -> str:
+                      top3: list, stop_loss: dict, roi_summary: dict,
+                      agent_section: str = '') -> str:
     """格式化日推送内容(Server酱Markdown格式)"""
     lines = []
     lines.append(f'## {date} 分析师日报')
     lines.append(f'模式: {mode} | 今日{len(predictions)}场比赛')
     lines.append('')
 
+    # AI分析师早报（Agent生成）
+    if agent_section:
+        lines.append(agent_section)
+        lines.append('---')
+        lines.append('')
+
     # 止损
     if stop_loss.get('active'):
         lines.append(f'> **止损模式**: 近7天ROI {stop_loss.get("roi", 0)}%, Kelly减半, 只推TOP1')
+        if stop_loss.get('agent_advice'):
+            lines.append(f'> 🤖 Agent建议: {stop_loss.get("agent_advice")}')
         lines.append('')
 
     # 全部比赛6项预测

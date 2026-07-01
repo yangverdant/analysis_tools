@@ -207,6 +207,28 @@ def learn(db_path: str = None, agent=None, days: int = 30, min_samples: int = 10
                     "reason": gate['reason'],
                 })
 
+        # 9. Segment自动挖掘 — 发现高偏差细分场景
+        try:
+            from backend.app.core.segment_discovery import run_segment_discovery
+            seg_result = run_segment_discovery(db_path)
+            if seg_result.get('discovered', 0) > 0:
+                logger.info('segment挖掘: 发现%d个高偏差场景', seg_result['discovered'])
+                # Agent确认是否生成新规则
+                if agent and seg_result['segments']:
+                    for seg in seg_result['segments'][:3]:
+                        try:
+                            agent.new_scenario({
+                                'segment': seg['key'],
+                                'model_accuracy': seg['model_accuracy'],
+                                'odds_accuracy': seg['odds_accuracy'],
+                                'gap': seg['gap'],
+                                'sample': seg['sample'],
+                            }, [])
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.debug('segment挖掘失败: %s', e)
+
         conn.commit()
         logger.info(f'学习完成: {len(adjustments)}项调整, {len(circuit_breaks)}项熔断 (含O/U专项)')
         return LearnResult(adjustments=len(adjustments), details=adjustments, circuit_breaks=circuit_breaks)

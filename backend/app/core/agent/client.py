@@ -369,6 +369,165 @@ class AnalystAgent:
             return None
         return resp
 
+    def daily_report(self, today_predictions: list, top3: list,
+                     recent_failures: list, recent_changes: list,
+                     roi_summary: dict) -> dict:
+        """生成自然语言分析师早报 — 强模型
+
+        Args:
+            today_predictions: 今日预测列表
+            top3: TOP3价值投注
+            recent_failures: 昨日翻车归因列表
+            recent_changes: 今早模型参数变更列表
+            roi_summary: {roi_7d, roi_30d, roi_all}
+
+        Returns:
+            {text: "Markdown早报内容", fallback: bool}
+        """
+        system = load_agent_prompt("daily_report")
+        # 精简数据避免token爆炸
+        top3_simple = [{
+            'match': f"{b.get('home','?')} vs {b.get('away','?')}",
+            'play': b.get('play_type', ''),
+            'selection': b.get('selection', ''),
+            'odds': b.get('odds', 0),
+            'edge': round(b.get('edge', 0) * 100, 1) if b.get('edge') else 0,
+        } for b in (top3 or [])[:3]]
+
+        failures_simple = [{
+            'match': f.get('home', '') + ' vs ' + f.get('away', ''),
+            'predicted': f.get('predicted', ''),
+            'actual': f.get('actual', ''),
+            'attribution': f.get('attribution_type', ''),
+            'actionable': f.get('actionable', False),
+        } for f in (recent_failures or [])[:5]]
+
+        changes_simple = [{
+            'param': c.get('param_name', ''),
+            'old': c.get('old_value', ''),
+            'new': c.get('new_value', ''),
+            'reason': (c.get('change_reason') or '')[:80],
+        } for c in (recent_changes or [])[:5]]
+
+        prompt = f"""
+今日预测: {len(today_predictions or [])}场
+TOP3价值投注: {json.dumps(top3_simple, ensure_ascii=False)}
+昨日翻车归因: {json.dumps(failures_simple, ensure_ascii=False)}
+今早模型调整: {json.dumps(changes_simple, ensure_ascii=False)}
+ROI概况: {json.dumps(roi_summary or {}, ensure_ascii=False)}
+
+请生成今日AI分析师早报（严格200字内，Markdown格式）。
+"""
+        resp = self.run(prompt, system=system, model="strong",
+                        max_tokens=1024, use_tools=True)
+        if resp.get("fallback"):
+            return {"text": self._rule_based_daily_report(
+                        today_predictions, top3, recent_failures,
+                        recent_changes, roi_summary),
+                    "fallback": True}
+        text = resp.get("text") or resp.get("raw_response") or ""
+        return {"text": text, "fallback": False}
+
+    def _rule_based_daily_report(self, today_predictions, top3,
+                                  recent_failures, recent_changes, roi_summary) -> str:
+        """LLM不可用时的规则化早报 — 用真实数据拼装"""
+        lines = ["## 🤖 AI分析师早报", ""]
+
+        # 今日重点
+        n = len(today_predictions or [])
+        if top3:
+            t = top3[0]
+            lines.append("### 📊 今日重点")
+            lines.append(f"今日{n}场比赛，TOP1: {t.get('home','?')} vs {t.get('away','?')} "
+                         f"→ {t.get('selection','?')} (优势{t.get('edge',0)*100:.0f}%)")
+            lines.append("")
+
+        # 昨日复盘
+        if recent_failures:
+            lines.append("### 🔥 昨日复盘")
+            lines.append(f"近2天翻车{len(recent_failures)}场:")
+            for f in recent_failures[:3]:
+                m = f"{f.get('home','')} vs {f.get('away','')}"
+                lines.append(f"- {m}: 预测{f.get('predicted','?')} 实际{f.get('actual','?')} "
+                             f"归因{f.get('attribution_type', f.get('attribution','?'))}")
+            lines.append("")
+
+        # 系统进化
+        if recent_changes:
+            lines.append("### 🧠 系统进化")
+            lines.append(f"今早模型调整{len(recent_changes)}项:")
+            for c in recent_changes[:3]:
+                lines.append(f"- {c.get('param_name','?')}: {c.get('old_value','')}→{c.get('new_value','')}")
+            lines.append("")
+
+        # 资金建议
+        if roi_summary:
+            lines.append("### 💰 资金建议")
+            r7 = roi_summary.get('7d', {})
+            r30 = roi_summary.get('30d', {})
+            lines.append(f"7天ROI {r7.get('roi','-')} ({r7.get('wins',0)}/{r7.get('matches',0)})，"
+                         f"30天ROI {r30.get('roi','-')}")
+            if r7 and r7.get('wins', 0) / max(r7.get('matches', 1), 1) > 0.6:
+                lines.append("近期表现强劲，可维持常规仓位。")
+            elif r7 and r7.get('wins', 0) / max(r7.get('matches', 1), 1) < 0.4:
+                lines.append("近期表现疲软，建议减仓或只投TOP1。")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    def stop_loss_advice(self, roi_summary: dict, stop_loss: dict,
+                         recent_bets: list) -> dict:
+        """止损决策建议 — 快速模型
+
+        Args:
+            roi_summary: {roi_7d, roi_30d, roi_all}
+            stop_loss: {active, roi, threshold}
+            recent_bets: 近期投注记录
+
+        Returns:
+            {action: "pause|reduce|normal", text: "建议", confidence: 0-1}
+        """
+        system = load_agent_prompt("stop_loss_advice") if self._has_prompt("stop_loss_advice") else None
+        if not system:
+            system = "你是资金管理顾问。根据ROI和近期投注，判断是否暂停投注、调仓或继续。输出JSON: {action, text, confidence}"
+
+        bets_simple = [{
+            'match': b.get('home', '') + ' vs ' + b.get('away', ''),
+            'play': b.get('play_type', ''),
+            'result': b.get('result', ''),
+            'profit': b.get('profit', 0),
+        } for b in (recent_bets or [])[:10]]
+
+        prompt = f"""
+当前ROI: 7天{roi_summary.get('roi_7d', 0):.1f}%, 30天{roi_summary.get('roi_30d', 0):.1f}%
+止损状态: {'激活' if stop_loss.get('active') else '未激活'} (阈值{stop_loss.get('threshold', -30)}%)
+近期投注: {json.dumps(bets_simple, ensure_ascii=False)}
+
+请判断：1)是否暂停投注 2)仓位调整方向 3)规避的玩法/场景
+输出JSON: {{action: "pause|reduce|normal", text: "自然语言建议", confidence: 0-1}}
+"""
+        resp = self.run(prompt, system=system, model="fast", use_tools=False)
+        if resp.get("fallback"):
+            return {"action": "reduce", "text": "", "confidence": 0}
+        import json as _json
+        text = resp.get("text") or ""
+        try:
+            if "```json" in text:
+                text = text.split("```json")[1].split("```")[0]
+            elif "```" in text:
+                text = text.split("```")[1].split("```")[0]
+            return _json.loads(text.strip())
+        except Exception:
+            return {"action": "reduce", "text": text[:200], "confidence": 0.5}
+
+    def _has_prompt(self, name: str) -> bool:
+        try:
+            from pathlib import Path
+            p = Path(__file__).parent.parent.parent.parent / "config" / "agent_prompts" / f"{name}.md"
+            return p.exists()
+        except Exception:
+            return False
+
     @staticmethod
     def _parse_json(text: str) -> dict:
         """从LLM输出中提取JSON"""

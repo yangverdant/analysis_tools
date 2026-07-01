@@ -27,8 +27,6 @@ def push(state, db_path: str) -> dict:
 
     # 止损检查: 近7天亏损>30%则降级
     stop_loss = _check_stop_loss(db_path)
-
-    # 获取今日有预测的比赛(北京时间窗口)
     predictions = _get_today_predictions(db_path, today, tomorrow)
 
     if not predictions:
@@ -58,6 +56,39 @@ def push(state, db_path: str) -> dict:
     # 计算ROI概况
     roi_summary = _compute_roi_summary(db_path)
 
+    # ===== Agent生成自然语言早报 =====
+    agent_report_text = ''
+    agent_decision = None
+    try:
+        from .agent.client import AnalystAgent
+        agent = AnalystAgent(db_path)
+
+        # 获取昨日翻车归因
+        recent_failures = _get_recent_failures(db_path, today)
+        # 获取今早模型调整
+        recent_changes = _get_recent_model_changes(db_path)
+        # Agent早报
+        report = agent.daily_report(predictions, top3, recent_failures,
+                                     recent_changes, roi_summary)
+        if report:
+            agent_report_text = report.get('text', '')
+            if report.get('fallback'):
+                logger.info('Agent早报使用规则化兜底 (%d字)', len(agent_report_text))
+            else:
+                logger.info('Agent早报LLM生成成功 (%d字)', len(agent_report_text))
+
+        # 止损决策
+        if stop_loss.get('active'):
+            recent_bets = _get_recent_bets(db_path, days=7)
+            decision = agent.stop_loss_advice(roi_summary, stop_loss, recent_bets)
+            if decision and not decision.get('fallback'):
+                agent_decision = decision
+                stop_loss['agent_advice'] = decision.get('text', '')
+                stop_loss['recommended_action'] = decision.get('action', 'reduce')
+                logger.info('Agent止损决策: %s', decision.get('action'))
+    except Exception as e:
+        logger.warning('Agent早报生成失败: %s', e)
+
     # 推送(初期只写日志)
     for i, bet in enumerate(top3, 1):
         logger.info('TOP%d: %s vs %s — %s (赔率%.2f, edge=%.1f%%)',
@@ -70,11 +101,17 @@ def push(state, db_path: str) -> dict:
     # 推送到所有渠道
     mode = stop_loss.get('active') and '止损' or 'normal'
     from .push_channels import format_daily_push, push_to_all_channels
-    push_content = format_daily_push(today, mode, predictions, top3, stop_loss, roi_summary)
+    push_content = format_daily_push(today, mode, predictions, top3, stop_loss, roi_summary,
+                                     agent_section=agent_report_text)
     push_results = push_to_all_channels(
         f'{today} 分析师日报',
         push_content
     )
+
+    # 写入push_history
+    _record_push_history(db_path, today, mode, predictions, top3,
+                         stop_loss, roi_summary, agent_report_text, agent_decision,
+                         push_results)
 
     return {
         'route': 'normal',
@@ -83,7 +120,138 @@ def push(state, db_path: str) -> dict:
         'stop_loss': stop_loss,
         'roi_summary': roi_summary,
         'channels': push_results,
+        'agent_report': agent_report_text,
     }
+
+
+def _get_recent_failures(db_path: str, today: str) -> list:
+    """获取昨日翻车归因"""
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT lv.lottery_match_id, lm.home_team_cn, lm.away_team_cn,
+                   lv.predicted_result, lv.actual_result,
+                   lv.attribution, lv.attribution_detail, lv.actionable
+            FROM lottery_validation lv
+            JOIN lottery_matches lm ON lv.lottery_match_id = lm.lottery_match_id
+            WHERE lv.is_correct = 0
+            AND lv.validated_at >= date('now', '-2 days')
+            ORDER BY lv.validated_at DESC
+            LIMIT 10
+        """)
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return [{
+            'match': f"{r.get('home_team_cn','')} vs {r.get('away_team_cn','')}",
+            'home': r.get('home_team_cn', ''),
+            'away': r.get('away_team_cn', ''),
+            'predicted': r.get('predicted_result', ''),
+            'actual': r.get('actual_result', ''),
+            'attribution_type': r.get('attribution', ''),
+            'actionable': bool(r.get('actionable')),
+        } for r in rows]
+    except Exception as e:
+        logger.debug('获取翻车归因失败: %s', e)
+        return []
+
+
+def _get_recent_model_changes(db_path: str) -> list:
+    """获取今早模型参数变更"""
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT param_name, old_value, new_value, change_reason, changed_at
+            FROM model_params_history
+            WHERE changed_at >= date('now', '-1 day')
+            ORDER BY changed_at DESC
+            LIMIT 10
+        """)
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return rows
+    except Exception as e:
+        logger.debug('获取模型变更失败: %s', e)
+        return []
+
+
+def _get_recent_bets(db_path: str, days: int = 7) -> list:
+    """获取近期投注记录"""
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT br.lottery_match_id, lm.home_team_cn, lm.away_team_cn,
+                   br.play_type, br.selection, br.odds, br.stake, br.result, br.profit
+            FROM bet_records br
+            LEFT JOIN lottery_matches lm ON br.lottery_match_id = lm.lottery_match_id
+            WHERE br.created_at >= datetime('now', ?)
+            ORDER BY br.created_at DESC
+            LIMIT 20
+        """, (f'-{days} days',))
+        rows = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+        return [{
+            'match': f"{r.get('home_team_cn','')} vs {r.get('away_team_cn','')}",
+            'home': r.get('home_team_cn', ''),
+            'away': r.get('away_team_cn', ''),
+            'play_type': r.get('play_type', ''),
+            'selection': r.get('selection', ''),
+            'result': r.get('result', ''),
+            'profit': r.get('profit', 0),
+        } for r in rows]
+    except Exception as e:
+        logger.debug('获取近期投注失败: %s', e)
+        return []
+
+
+def _record_push_history(db_path: str, push_date: str, mode: str,
+                         predictions: list, top3: list, stop_loss: dict,
+                         roi_summary: dict, agent_report: str,
+                         agent_decision: dict, channels: dict) -> None:
+    """记录推送历史到push_history表"""
+    try:
+        conn = sqlite3.connect(db_path, timeout=10)
+        cursor = conn.cursor()
+        # 确保表存在
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS push_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                push_date TEXT NOT NULL,
+                mode TEXT,
+                predictions_count INTEGER,
+                top3_json TEXT,
+                stop_loss_json TEXT,
+                roi_summary_json TEXT,
+                agent_report_text TEXT,
+                agent_decision_json TEXT,
+                channels_json TEXT,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO push_history
+            (push_date, mode, predictions_count, top3_json, stop_loss_json,
+             roi_summary_json, agent_report_text, agent_decision_json, channels_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            push_date, mode, len(predictions),
+            json.dumps(top3, ensure_ascii=False),
+            json.dumps(stop_loss, ensure_ascii=False),
+            json.dumps(roi_summary, ensure_ascii=False),
+            agent_report,
+            json.dumps(agent_decision or {}, ensure_ascii=False),
+            json.dumps(channels, ensure_ascii=False),
+        ))
+        conn.commit()
+        conn.close()
+        logger.info('push_history已记录: %s', push_date)
+    except Exception as e:
+        logger.warning('记录push_history失败: %s', e)
 
 
 def _get_today_predictions(db_path: str, today: str, tomorrow: str) -> List[dict]:
