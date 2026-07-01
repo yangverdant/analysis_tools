@@ -209,25 +209,37 @@ def learn(db_path: str = None, agent=None, days: int = 30, min_samples: int = 10
 
         # 9. Segment自动挖掘 — 发现高偏差细分场景
         try:
+            conn.commit()  # 释放写锁, 让segment_discovery的新连接能写入
             from backend.app.core.segment_discovery import run_segment_discovery
             seg_result = run_segment_discovery(db_path)
             if seg_result.get('discovered', 0) > 0:
                 logger.info('segment挖掘: 发现%d个高偏差场景', seg_result['discovered'])
                 # Agent确认是否生成新规则
-                if agent and seg_result['segments']:
+                if agent and seg_result.get('segments'):
                     for seg in seg_result['segments'][:3]:
                         try:
                             agent.new_scenario({
                                 'segment': seg['key'],
-                                'model_accuracy': seg['model_accuracy'],
-                                'odds_accuracy': seg['odds_accuracy'],
-                                'gap': seg['gap'],
-                                'sample': seg['sample'],
+                                'model_accuracy': seg.get('model_accuracy'),
+                                'odds_accuracy': seg.get('odds_accuracy'),
+                                'gap': seg.get('gap'),
+                                'sample': seg.get('sample'),
                             }, [])
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning('Agent new_scenario调用失败: %s', e)
+            else:
+                logger.info('segment挖掘: 无高偏差场景发现')
         except Exception as e:
-            logger.debug('segment挖掘失败: %s', e)
+            logger.warning('segment挖掘失败: %s', e)
+
+        # 10. 概率校准 — 计算分桶校准曲线, 直接提升命中率
+        try:
+            conn.commit()  # 释放写锁
+            from backend.app.core.probability_calibration import compute_calibration
+            cal_result = compute_calibration(db_path, days=days, min_sample=5)
+            logger.info('概率校准: %s', cal_result.get('buckets', 0))
+        except Exception as e:
+            logger.warning('概率校准失败: %s', e)
 
         conn.commit()
         logger.info(f'学习完成: {len(adjustments)}项调整, {len(circuit_breaks)}项熔断 (含O/U专项)')

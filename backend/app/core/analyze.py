@@ -874,6 +874,22 @@ def _analyze_single(db_path: str, match: dict) -> dict:
         _apply_selective_recommendation_guard(db_path, match, result)
         _sync_final_prediction_scores(result)
 
+        # 12b. 概率校准 — 用历史验证数据校准各玩法confidence, 直接提升命中率
+        try:
+            from backend.app.core.probability_calibration import apply_calibration_to_play
+            plays = result.get('play_predictions', {})
+            if isinstance(plays, dict):
+                cal_applied = 0
+                for ptype, play in plays.items():
+                    if isinstance(play, dict) and ptype != 'top3_scores':
+                        if apply_calibration_to_play(db_path, ptype, play):
+                            cal_applied += 1
+                if cal_applied:
+                    result['calibration_applied'] = cal_applied
+                    logger.debug('概率校准: 应用%d个玩法', cal_applied)
+        except Exception as exc:
+            logger.debug('概率校准应用失败: %s', exc)
+
         # 13. 比赛脚本 + 模型基线
         try:
             from backend.app.core.match_script import build_match_script
