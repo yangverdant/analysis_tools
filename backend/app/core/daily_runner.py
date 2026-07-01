@@ -39,7 +39,13 @@ def get_handlers(db_path: str = None):
 
     # learn函数签名不同: learn(db_path, agent, days, min_samples)
     def learn_adapter(state, db=_db):
-        result = _learn(db_path=db, agent=None)
+        from .agent.client import AnalystAgent
+        try:
+            agent = AnalystAgent(db)
+        except Exception as e:
+            logger.warning('AnalystAgent实例化失败, segment发现跳过Agent确认: %s', e)
+            agent = None
+        result = _learn(db_path=db, agent=agent)
         return {
             'route': 'normal',
             'adjustments': result.adjustments,
