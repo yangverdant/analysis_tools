@@ -316,7 +316,14 @@ def _get_today_predictions(db_path: str, today: str, tomorrow: str) -> List[dict
 
 
 def _rank_value_bets(predictions: List[dict]) -> List[dict]:
-    """按Edge/Kelly排序价值投注 — 过滤avoid级预测(校准降级标记)"""
+    """按Edge/Kelly排序价值投注 — 多玩法选择(spf/rqspf)取每场最大edge
+
+    体彩可投玩法: spf/rqspf/bf/bqc (无ou). 按准确率+edge筛选:
+    - spf: 55.9%准确率, 主玩法, 概率vs赔率基线
+    - rqspf: 49.0%准确率, 概率vs market_probabilities
+    - bf/bqc: 27.3%/35.8%准确率低, 不纳入top3价值投注(只在玩法推算里展示)
+    ou虽53.7%但体彩无此玩法不投注.
+    """
     bets = []
     for pred in predictions:
         try:
@@ -327,17 +334,18 @@ def _rank_value_bets(predictions: List[dict]) -> List[dict]:
                             pred.get('home_team_cn', ''),
                             pred.get('away_team_cn', ''))
                 continue
-            probs = pred.get('probabilities', {})
-            if not probs:
-                continue
 
-            # oddsfe赔率 → 隐含概率(1/odds归一化)
-            odds_baseline = pred.get('odds_baseline')
-            implied_probs = None
-            if odds_baseline:
+            play_predictions = pred.get('play_predictions', {}) or {}
+            candidate_bets = []
+
+            # === 1. SPF ===
+            spf = play_predictions.get('spf', {}) or {}
+            spf_probs = spf.get('probabilities', {}) or {}
+            if spf_probs and spf.get('recommendation'):
+                odds_baseline = pred.get('odds_baseline') or {}
+                prob_keys = {'home_win': '3', 'draw': '1', 'away_win': '0'}
+                implied_probs = None
                 try:
-                    # 只取概率键，排除source等元数据
-                    prob_keys = {'home_win', 'draw', 'away_win'}
                     prob_values = [v for k, v in odds_baseline.items() if k in prob_keys and v > 0]
                     total = sum(1.0 / v for v in prob_values) if prob_values else 0
                     if total > 0:
@@ -345,42 +353,82 @@ def _rank_value_bets(predictions: List[dict]) -> List[dict]:
                                         if k in prob_keys and v > 0}
                 except Exception:
                     pass
+                rec = str(spf.get('recommendation', ''))
+                # spf_probs可能用 '3'/'1'/'0' 或 'home_win'/'draw'/'away_win' 作键
+                key_alt = {'3': 'home_win', '1': 'draw', '0': 'away_win'}.get(rec, rec)
+                model_prob = spf_probs.get(rec) or spf_probs.get(key_alt) or 0
+                implied_prob = (implied_probs or {}).get(key_alt, 0)
+                edge = model_prob - implied_prob if implied_prob > 0 else model_prob - 0.33
+                conf_map = {'high': 0.8, 'medium': 0.6, 'low': 0.4, 'avoid': 0.2}
+                conf_numeric = conf_map.get(spf.get('confidence_level') or spf.get('confidence_tier') or 'medium', 0.5)
+                if model_prob > 0:
+                    candidate_bets.append({
+                        'play_type': 'spf',
+                        'selection': rec,
+                        'selection_cn': spf.get('recommendation_cn') or {'3': '主胜', '1': '平', '0': '客胜'}.get(rec, rec),
+                        'model_prob': model_prob,
+                        'implied_prob': implied_prob,
+                        'confidence': conf_numeric,
+                        'edge': edge,
+                        'confidence_level': spf.get('confidence_level') or spf.get('confidence_tier') or 'medium',
+                    })
 
-            # 概率键映射: home_win/3, draw/1, away_win/0
-            key_map = {'home_win': '3', 'draw': '1', 'away_win': '0'}
-            norm_probs = {}
-            for k, v in probs.items():
-                nk = key_map.get(k, k)
-                norm_probs[nk] = v
+            # === 2. RQSPF (让球胜平负) ===
+            rqspf = play_predictions.get('rqspf', {}) or {}
+            if rqspf.get('recommendation') and rqspf.get('probabilities'):
+                rec = str(rqspf.get('recommendation', ''))
+                probs = rqspf.get('probabilities', {}) or {}
+                market_probs = rqspf.get('market_probabilities') or {}
+                rec_clean = rec.split('+')[0].split('-')[0].strip() if rec else ''
+                model_prob = probs.get(rec) or probs.get(rec_clean) or 0
+                implied_prob = market_probs.get(rec) or market_probs.get(rec_clean) or 0
+                edge = model_prob - implied_prob if implied_prob > 0 else model_prob - 0.33
+                conf_map = {'high': 0.8, 'medium': 0.6, 'low': 0.4, 'avoid': 0.2}
+                conf_numeric = conf_map.get(rqspf.get('confidence_level') or rqspf.get('confidence_tier') or 'medium', 0.5)
+                if model_prob > 0:
+                    candidate_bets.append({
+                        'play_type': 'rqspf',
+                        'selection': rec,
+                        'selection_cn': rqspf.get('recommendation_cn') or rec,
+                        'model_prob': model_prob,
+                        'implied_prob': implied_prob,
+                        'confidence': conf_numeric,
+                        'edge': edge,
+                        'confidence_level': rqspf.get('confidence_level') or rqspf.get('confidence_tier') or 'medium',
+                        'handicap': rqspf.get('handicap'),
+                    })
 
-            # 找最大概率选项
-            if not norm_probs:
+            if not candidate_bets:
                 continue
-            best = max(norm_probs, key=norm_probs.get)
-            model_prob = norm_probs[best]
 
-            # 计算edge
-            implied_prob = (implied_probs or {}).get(best, 0)
-            edge = model_prob - implied_prob if implied_prob > 0 else model_prob - 0.33
+            # 过滤avoid候选 — 校准降级的不纳入
+            candidate_bets = [c for c in candidate_bets if c.get('confidence_level') != 'avoid']
+            if not candidate_bets:
+                continue
 
-            # Kelly简化: (prob * odds - 1) / (odds - 1), 用edge近似
-            kelly = max(0, edge * 2)  # 简化Kelly
+            # 取该场最大edge的玩法作为推荐
+            best_bet = max(candidate_bets, key=lambda x: x.get('edge', 0))
+            # 只有edge>0.03(3pp)才值得投注
+            if best_bet.get('edge', 0) < 0.03:
+                continue
 
-            bets.append({
+            kelly = max(0, best_bet.get('edge', 0) * 2)
+            best_bet.update({
                 'lottery_match_id': pred.get('lottery_match_id'),
                 'home': pred.get('home_team_cn', ''),
                 'away': pred.get('away_team_cn', ''),
                 'league': pred.get('league_name_cn', ''),
-                'selection': best,
-                'prob': model_prob,
-                'implied_prob': implied_prob,
-                'confidence': pred.get('confidence_numeric', 0.5),
-                'edge': edge,
                 'kelly': kelly,
-                'play_type': 'spf',
                 'model_vs_odds': pred.get('model_vs_odds'),
+                'alternative_bets': [
+                    {'play_type': c.get('play_type'), 'selection': c.get('selection'),
+                     'edge': round(c.get('edge', 0), 4), 'confidence': c.get('confidence')}
+                    for c in candidate_bets if c != best_bet
+                ],
             })
-        except Exception:
+            bets.append(best_bet)
+        except Exception as e:
+            logger.debug('rank_value_bets处理失败 %s: %s', pred.get('lottery_match_id'), e)
             continue
 
     bets.sort(key=lambda x: x.get('edge', 0), reverse=True)
@@ -476,27 +524,34 @@ def _record_bets(db_path: str, bets: List[dict]):
 
 
 def _get_real_odds(cursor, lottery_match_id: str, play_type: str, selection: str) -> float:
-    """从lottery_odds获取体彩实际赔率(如SPF: 1.45)"""
+    """从lottery_odds获取体彩实际赔率. 支持spf/rqspf/bqc/bf/ttg."""
     try:
-        # Try SPF first, then RQSPF as fallback
-        for pt in [play_type, 'rqspf']:
-            if pt == play_type or play_type == 'spf':
-                cursor.execute("""
-                    SELECT odds_data FROM lottery_odds
-                    WHERE lottery_match_id = ? AND play_type = ?
-                    ORDER BY created_at DESC LIMIT 1
-                """, (lottery_match_id, pt))
-                row = cursor.fetchone()
-                if not row:
+        import json as _json
+        # 选项清洗: rqspf的selection可能是'3+1'/'1'等, 取首个数字键
+        sel_key = str(selection).split('+')[0].split('-')[0].strip() if selection else ''
+
+        # 按play_type查询, 找不到再尝试rqspf作为spf的fallback
+        search_types = [play_type] if play_type != 'spf' else ['spf', 'rqspf']
+        for pt in search_types:
+            cursor.execute("""
+                SELECT odds_data FROM lottery_odds
+                WHERE lottery_match_id = ? AND play_type = ?
+                ORDER BY created_at DESC LIMIT 1
+            """, (lottery_match_id, pt))
+            row = cursor.fetchone()
+            if not row:
+                continue
+            odds_data = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
+            # 尝试完整selection或清洗后的sel_key
+            for key in (selection, sel_key):
+                if not key:
                     continue
-
-                import json as _json
-                odds_data = _json.loads(row[0]) if isinstance(row[0], str) else row[0]
-
-                key = selection  # '3', '1', '0'
-                odds_value = float(odds_data.get(key, 0))
-                if odds_value > 1:
-                    return odds_value
+                try:
+                    odds_value = float(odds_data.get(key, 0))
+                    if odds_value > 1:
+                        return odds_value
+                except Exception:
+                    continue
         return 0
     except Exception:
         return 0

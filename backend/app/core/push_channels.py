@@ -141,16 +141,26 @@ def format_daily_push(date: str, mode: str, predictions: list,
     # TOP3价值投注
     if top3:
         lines.append('### 推荐投注 TOP3')
+        play_type_map = {'spf': '胜平负', 'rqspf': '让球', 'ou': '大小球', 'bqc': '半全场', 'bf': '比分'}
+        selection_map = {'3': '主胜', '1': '平局', '0': '客胜'}
         for i, bet in enumerate(top3, 1):
             home = bet.get('home', '主')
             away = bet.get('away', '客')
             league = bet.get('league', '')
-            selection_map = {'3': '主胜', '1': '平局', '0': '客胜'}
-            selection = selection_map.get(bet.get('selection', ''), bet.get('selection', ''))
+            play_type = bet.get('play_type', 'spf')
+            play_label = play_type_map.get(play_type, play_type)
+            # selection_cn来自_rank_value_bets的映射, 没有就用selection_map
+            selection = bet.get('selection_cn') or selection_map.get(bet.get('selection', ''), bet.get('selection', ''))
             edge = bet.get('edge', 0)
-            reason = bet.get('reason', '模型推荐')
-            lines.append(f'**{i}. {league} {home} vs {away}**')
-            lines.append(f'   → {selection} | 优势+{edge:.0%}')
+            model_prob = bet.get('model_prob', 0)
+            reason = bet.get('reason', f'{play_label}价值投注')
+            lines.append(f'**{i}. [{play_label}] {league} {home} vs {away}**')
+            lines.append(f'   → {selection} | 模型概率{model_prob:.0%} | 优势+{edge:.0%}')
+            # 备选玩法
+            alts = bet.get('alternative_bets') or []
+            if alts:
+                alt_strs = [f"{a.get('play_type')}:{a.get('selection')}(edge+{a.get('edge',0):.0%})" for a in alts]
+                lines.append(f'   备选: {\" | \".join(alt_strs)}')
             lines.append(f'   {reason}')
             lines.append('')
     else:
