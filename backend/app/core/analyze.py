@@ -9563,9 +9563,20 @@ def _compute_bqc(
             total_home += i * prob
             total_away += j * prob
 
-    # 半场xG ≈ 全场的45%，再用近期上半场进/丢球画像做小幅校正
-    half_home_xg = total_home * 0.45
-    half_away_xg = total_away * 0.45
+    # 半场xG — 按全场总进球量动态调整占比
+    # Empirical: FT_total=1 → 0.565, FT_total=2 → 0.465, FT_total=3 → 0.388, FT_total=4 → 0.388
+    # 高进球场次下半场占比更高, 固定0.45会高估半场领先概率导致过度预测33
+    total_goals_xg = total_home + total_away
+    if total_goals_xg <= 1.5:
+        _ht_ratio = 0.50
+    elif total_goals_xg <= 2.5:
+        _ht_ratio = 0.45
+    elif total_goals_xg <= 3.5:
+        _ht_ratio = 0.40
+    else:
+        _ht_ratio = 0.38
+    half_home_xg = total_home * _ht_ratio
+    half_away_xg = total_away * _ht_ratio
     phase_profile = _load_bqc_phase_profile(db_path, match or {}) if _bqc_phase_profile_enabled() and db_path and match else {}
     if phase_profile:
         home_phase = phase_profile.get('home') or {}
