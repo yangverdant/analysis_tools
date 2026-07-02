@@ -289,13 +289,14 @@ def _get_today_predictions(db_path: str, today: str, tomorrow: str) -> List[dict
                     }
                 pred['probabilities'] = final.get('probabilities', {})
                 pred['confidence'] = final.get('confidence', 'medium')
+                pred['confidence_level'] = final.get('confidence_level') or final.get('confidence_tier') or 'medium'
                 pred['recommended'] = final.get('predicted_result', '') or final.get('recommended', '')
                 pred['model_vs_odds'] = report.get('model_vs_odds')
                 pred['odds_baseline'] = report.get('odds_baseline')
                 pred['play_predictions'] = report.get('play_predictions', {})
                 # confidence_level → numeric for sorting
-                conf_map = {'high': 0.8, 'medium': 0.6, 'low': 0.4}
-                pred['confidence_numeric'] = conf_map.get(pred['confidence'], 0.5)
+                conf_map = {'high': 0.8, 'medium': 0.6, 'low': 0.4, 'avoid': 0.2}
+                pred['confidence_numeric'] = conf_map.get(pred['confidence_level'], 0.5)
             except Exception:
                 pass
             results.append(pred)
@@ -308,10 +309,17 @@ def _get_today_predictions(db_path: str, today: str, tomorrow: str) -> List[dict
 
 
 def _rank_value_bets(predictions: List[dict]) -> List[dict]:
-    """按Edge/Kelly排序价值投注"""
+    """按Edge/Kelly排序价值投注 — 过滤avoid级预测(校准降级标记)"""
     bets = []
     for pred in predictions:
         try:
+            # 过滤校准降级为avoid的预测 — 历史证明这个区间不准
+            if pred.get('confidence_level') == 'avoid':
+                logger.info('过滤avoid预测: %s %s vs %s (校准降级)',
+                            pred.get('lottery_match_id'),
+                            pred.get('home_team_cn', ''),
+                            pred.get('away_team_cn', ''))
+                continue
             probs = pred.get('probabilities', {})
             if not probs:
                 continue
