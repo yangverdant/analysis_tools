@@ -241,6 +241,34 @@ def learn(db_path: str = None, agent=None, days: int = 30, min_samples: int = 10
         except Exception as e:
             logger.warning('概率校准失败: %s', e)
 
+        # 11. 归因驱动学习 — 从lottery_validation.attribution消费失败模式
+        try:
+            conn.commit()  # 释放写锁
+            from backend.app.core.attribution_driven_learning import run_attribution_driven_learning
+            attr_result = run_attribution_driven_learning(db_path, days=days, agent=agent)
+            if attr_result.get('patterns_found', 0) > 0:
+                logger.info('归因驱动: 发现%d个模式, %d项调整 — %s',
+                             attr_result['patterns_found'],
+                             len(attr_result.get('adjustments', [])),
+                             attr_result.get('summary', ''))
+                # 把归因驱动调整也纳入details, 让上层能看到
+                for adj in attr_result.get('adjustments', []):
+                    adjustments.append({
+                        'factor': adj.get('factor', ''),
+                        'scene': adj.get('scene', 'unknown'),
+                        'participant_type': 'all',
+                        'play_type': adj.get('play_type', 'spf'),
+                        'old': adj.get('old', 0),
+                        'new': adj.get('new', 0),
+                        'improved': True,
+                        'action_type': adj.get('action_type', ''),
+                        'reason': adj.get('reason', ''),
+                    })
+            else:
+                logger.info('归因驱动: 无归因数据或无可执行调整')
+        except Exception as e:
+            logger.warning('归因驱动学习失败: %s', e)
+
         conn.commit()
         logger.info(f'学习完成: {len(adjustments)}项调整, {len(circuit_breaks)}项熔断 (含O/U专项)')
         return LearnResult(adjustments=len(adjustments), details=adjustments, circuit_breaks=circuit_breaks)
