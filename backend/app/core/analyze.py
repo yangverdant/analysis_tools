@@ -9540,6 +9540,85 @@ def _apply_goal_profile_adjustment(db_path: str, match: dict, result: dict) -> N
     }
 
 
+def _infer_bqc_scene(match: dict) -> str:
+    """从match字段推断scenario_type — 与_analysis_scenario_type对齐但更简单"""
+    league_text = ' '.join(
+        str((match or {}).get(key) or '')
+        for key in ('league_name_cn', 'league_name_en', 'league_name', 'competition', 'competition_name')
+    )
+    if any(t in league_text for t in ('友谊', '国际赛')):
+        return 'friendly_intl'
+    if any(t in league_text for t in ('世预', '欧预', '非预', '亚预', '南美预')):
+        return 'qualifier'
+    if '欧洲联' in league_text:
+        return 'nations_league'
+    if (any(t in league_text for t in ('世界杯', '欧洲杯', '亚洲杯', '美洲杯', '非洲杯'))
+            or 'world cup' in league_text.lower()
+            or 'euro' in league_text.lower()
+            or 'copa america' in league_text.lower()):
+        return 'international_cup'
+    if any(t in league_text for t in ('欧冠', '欧联', '欧协', '解放者', '亚冠')):
+        return 'continental_cup'
+    if '杯' in league_text:
+        return 'domestic_cup'
+    return 'league'
+
+
+def _load_scene_ht_transition(db_path: str, scene: str) -> Optional[dict]:
+    """从model_params_history加载scene-specific HT→FT transition matrix
+
+    Returns: {'h': {'h': p, 'd': p, 'a': p}, 'd': {...}, 'a': {...}} 或 None
+    """
+    if not db_path or not scene:
+        return None
+    try:
+        import sqlite3, json
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute("""
+                SELECT new_value FROM model_params_history
+                WHERE param_name = ?
+                ORDER BY changed_at DESC LIMIT 1
+            """, (f'bqc_ht_transition_{scene}_attribution',)).fetchone()
+            if row and row[0]:
+                data = json.loads(row[0])
+                # 必须三个key都有
+                if all(k in data for k in ('h', 'd', 'a')):
+                    return {k: data[k] for k in ('h', 'd', 'a')}
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return None
+
+
+def _load_scene_ou_lambda_scale(db_path: str, scene: str) -> float:
+    """从model_params_history加载scene-specific OU lambda缩放因子
+
+    Returns: scale (默认1.0, 范围0.80-1.20)
+    """
+    if not db_path or not scene:
+        return 1.0
+    try:
+        import sqlite3
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute("""
+                SELECT new_value FROM model_params_history
+                WHERE param_name = ?
+                ORDER BY changed_at DESC LIMIT 1
+            """, (f'ou_lambda_scale_{scene}_attribution',)).fetchone()
+            if row and row[0]:
+                scale = float(row[0])
+                if 0.5 <= scale <= 1.5:
+                    return scale
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return 1.0
+
+
 def _compute_bqc(
     score_matrix,
     match: dict = None,
@@ -9645,6 +9724,14 @@ def _compute_bqc(
         'd': {'h': 0.349, 'd': 0.401, 'a': 0.251},
         'a': {'h': 0.111, 'd': 0.209, 'a': 0.680},
     }
+    # 归因驱动: 若该场景有lottery_validation重算的transition, 优先使用
+    try:
+        _bqc_scene = _infer_bqc_scene(match or {})
+        _scene_transition = _load_scene_ht_transition(db_path, _bqc_scene)
+        if _scene_transition:
+            _EMPIRICAL_TRANSITION = _scene_transition
+    except Exception:
+        pass
     bqc_raw = {
         'hh': half_home * _EMPIRICAL_TRANSITION['h']['h'],
         'hd': half_home * _EMPIRICAL_TRANSITION['h']['d'],
