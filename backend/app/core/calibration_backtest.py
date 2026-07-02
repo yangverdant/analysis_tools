@@ -138,4 +138,55 @@ def backtest_summary(db_path: str, days: int = 60) -> dict:
             'cal_separation': info['cal_separation'],
             'separation_lift': info['separation_lift'],
         }
+    # Brier分数对比
+    brier = _compute_brier_comparison(db_path, days)
+    for pt in summary:
+        if pt in brier:
+            summary[pt]['raw_brier'] = brier[pt]['raw_brier']
+            summary[pt]['cal_brier'] = brier[pt]['cal_brier']
+            summary[pt]['brier_improvement'] = brier[pt]['diff']
     return summary
+
+
+def _compute_brier_comparison(db_path: str, days: int) -> dict:
+    """对比 raw vs calibrated 的 Brier 分数"""
+    conn = sqlite3.connect(db_path, timeout=10)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT play_type, predicted_prob, is_correct
+        FROM lottery_validation
+        WHERE validated_at >= datetime('now', ?)
+          AND predicted_prob IS NOT NULL
+          AND is_correct IS NOT NULL
+    """, (f'-{days} days',)).fetchall()
+    conn.close()
+
+    by_play = {}
+    for r in rows:
+        pt = r['play_type']
+        if pt not in by_play:
+            by_play[pt] = {'n': 0, 'raw_brier': 0.0, 'cal_brier': 0.0, 'cal_n': 0}
+        by_play[pt]['n'] += 1
+        raw = r['predicted_prob']
+        actual = 1.0 if r['is_correct'] else 0.0
+        by_play[pt]['raw_brier'] += (raw - actual) ** 2
+
+        lookup = get_calibrated_prob_lookup(db_path, pt)
+        if lookup:
+            cal = _calibrate(raw, lookup)
+            if cal is not None:
+                by_play[pt]['cal_brier'] += (cal - actual) ** 2
+                by_play[pt]['cal_n'] += 1
+
+    result = {}
+    for pt, info in by_play.items():
+        raw_b = info['raw_brier'] / info['n'] if info['n'] else 0
+        cal_b = info['cal_brier'] / info['cal_n'] if info['cal_n'] else None
+        result[pt] = {
+            'raw_brier': round(raw_b, 4),
+            'cal_brier': round(cal_b, 4) if cal_b is not None else None,
+            'diff': round(cal_b - raw_b, 4) if cal_b is not None else None,
+            'sample': info['n'],
+            'cal_sample': info['cal_n'],
+        }
+    return result

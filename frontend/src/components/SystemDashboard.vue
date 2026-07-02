@@ -199,19 +199,16 @@
               <div v-for="(info, pt) in calibrationBacktest" :key="pt" class="cal-row">
                 <div class="cal-pt">{{ pt }}</div>
                 <div class="cal-stats">
-                  <span class="cal-stat">raw高 {{ info.raw_high_acc != null ? (info.raw_high_acc * 100).toFixed(1) + '%' : '—' }}</span>
-                  <span class="cal-stat">cal高 {{ info.cal_high_acc != null ? (info.cal_high_acc * 100).toFixed(1) + '%' : '—' }}</span>
-                  <span class="cal-stat">raw低 {{ info.raw_low_acc != null ? (info.raw_low_acc * 100).toFixed(1) + '%' : '—' }}</span>
-                  <span class="cal-stat">cal低 {{ info.cal_low_acc != null ? (info.cal_low_acc * 100).toFixed(1) + '%' : '—' }}</span>
-                </div>
-                <div class="cal-lift" :class="info.separation_lift > 0 ? 'pos' : (info.separation_lift < 0 ? 'neg' : '')">
-                  {{ info.separation_lift != null ? (info.separation_lift > 0 ? '+' : '') + (info.separation_lift * 100).toFixed(1) + 'pp' : '—' }}
+                  <span class="cal-stat" :title="校准前后Brier分数(越低越好)">Brier {{ info.raw_brier?.toFixed(3) }}→{{ info.cal_brier?.toFixed(3) }}</span>
+                  <span class="cal-stat" :class="info.brier_improvement < 0 ? 'pos' : ''">改善 {{ info.brier_improvement != null ? (info.brier_improvement > 0 ? '+' : '') + info.brier_improvement.toFixed(4) : '—' }}</span>
+                  <span class="cal-stat" :title="高信心档准确率">高{{ info.cal_high_acc != null ? (info.cal_high_acc * 100).toFixed(0) + '%' : '—' }}/{{ info.raw_high_acc != null ? (info.raw_high_acc * 100).toFixed(0) + '%' : '—' }}</span>
+                  <span class="cal-stat" :class="info.separation_lift > 0 ? 'pos' : ''" v-if="info.separation_lift != null">分离度{{ info.separation_lift > 0 ? '+' : '' }}{{ (info.separation_lift * 100).toFixed(0) }}pp</span>
                 </div>
                 <div class="cal-sample">{{ info.sample }}场</div>
               </div>
             </div>
             <div v-else class="empty">暂无校准数据</div>
-            <div class="cal-note">分离度提升 = (cal高-低) - (raw高-低), 正值=校准让高低信心档区分度变大</div>
+            <div class="cal-note">Brier改善为负=概率估计更准; 分离度提升=高低信心档区分度变大</div>
           </div>
         </div>
       </div>
@@ -582,10 +579,11 @@ onMounted(loadAll)
 .seg-sample { color: #64748b; text-align: right; }
 
 .cal-backtest { display: flex; flex-direction: column; gap: 6px; }
-.cal-row { display: grid; grid-template-columns: 50px 1fr 60px 40px; gap: 8px; padding: 8px; background: #1e293b; border-radius: 4px; font-size: 11px; align-items: center; }
+.cal-row { display: grid; grid-template-columns: 50px 1fr 50px; gap: 8px; padding: 8px; background: #1e293b; border-radius: 4px; font-size: 11px; align-items: center; }
 .cal-pt { color: #e2e8f0; font-weight: 600; font-family: monospace; }
 .cal-stats { display: flex; gap: 8px; flex-wrap: wrap; }
 .cal-stat { color: #94a3b8; }
+.cal-stat.pos { color: #10b981; }
 .cal-lift { text-align: right; font-weight: 600; }
 .cal-lift.pos { color: #10b981; }
 .cal-lift.neg { color: #ef4444; }
