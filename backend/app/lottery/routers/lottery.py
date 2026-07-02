@@ -3497,6 +3497,21 @@ async def get_discovered_segments():
         conn.close()
 
 
+@router.get("/calibration-backtest")
+async def get_calibration_backtest(days: int = Query(60, ge=7, le=180)):
+    """校准效果回测 — 量化校准作为信心分层的价值
+
+    对比 raw_prob vs calibrated_prob 按高/中/低信心档分组的准确率,
+    计算 separation_lift = (cal高-低) - (raw高-低), 正值=校准提升区分度.
+    """
+    try:
+        from backend.app.core.calibration_backtest import backtest_summary
+        summary = backtest_summary(DB_PATH, days=days)
+        return {'days': days, 'summary': summary}
+    except Exception as e:
+        return {'days': days, 'summary': {}, 'error': str(e)}
+
+
 @router.get("/scene-accuracy")
 async def get_scene_accuracy(days: int = Query(30, ge=1, le=180)):
     """场景×玩法准确率矩阵 — 驾驶舱热力图数据源

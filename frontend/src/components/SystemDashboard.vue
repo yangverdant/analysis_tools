@@ -192,6 +192,27 @@
             </div>
             <div v-else class="empty">暂无发现</div>
           </div>
+
+          <div class="panel-card">
+            <h3>概率校准效果</h3>
+            <div class="cal-backtest" v-if="Object.keys(calibrationBacktest).length">
+              <div v-for="(info, pt) in calibrationBacktest" :key="pt" class="cal-row">
+                <div class="cal-pt">{{ pt }}</div>
+                <div class="cal-stats">
+                  <span class="cal-stat">raw高 {{ info.raw_high_acc != null ? (info.raw_high_acc * 100).toFixed(1) + '%' : '—' }}</span>
+                  <span class="cal-stat">cal高 {{ info.cal_high_acc != null ? (info.cal_high_acc * 100).toFixed(1) + '%' : '—' }}</span>
+                  <span class="cal-stat">raw低 {{ info.raw_low_acc != null ? (info.raw_low_acc * 100).toFixed(1) + '%' : '—' }}</span>
+                  <span class="cal-stat">cal低 {{ info.cal_low_acc != null ? (info.cal_low_acc * 100).toFixed(1) + '%' : '—' }}</span>
+                </div>
+                <div class="cal-lift" :class="info.separation_lift > 0 ? 'pos' : (info.separation_lift < 0 ? 'neg' : '')">
+                  {{ info.separation_lift != null ? (info.separation_lift > 0 ? '+' : '') + (info.separation_lift * 100).toFixed(1) + 'pp' : '—' }}
+                </div>
+                <div class="cal-sample">{{ info.sample }}场</div>
+              </div>
+            </div>
+            <div v-else class="empty">暂无校准数据</div>
+            <div class="cal-note">分离度提升 = (cal高-低) - (raw高-低), 正值=校准让高低信心档区分度变大</div>
+          </div>
         </div>
       </div>
 
@@ -276,6 +297,7 @@ const discoveredSegments = ref([])
 const pushHistory = ref([])
 const sceneAccuracy = ref([])
 const baseline = ref(0)
+const calibrationBacktest = ref({})
 const playTypes = ['spf', 'rqspf', 'ou', 'bqc', 'bf']
 
 const tabs = computed(() => [
@@ -428,7 +450,7 @@ const loadAll = async () => {
   loading.value = true
   error.value = ''
   try {
-    const [dash, model, sched, tl, lh, rt, bets, segs, ph, sa, at] = await Promise.all([
+    const [dash, model, sched, tl, lh, rt, bets, segs, ph, sa, at, cb] = await Promise.all([
       fetch('/api/v1/lottery/automation-dashboard').then(r => r.json()),
       fetch('/api/v1/lottery/model-status').then(r => r.json()),
       fetch('/api/scheduler/status').then(r => r.json()),
@@ -440,6 +462,7 @@ const loadAll = async () => {
       fetch('/api/v1/lottery/push-history?limit=3').then(r => r.json()).catch(() => ({ history: [] })),
       fetch('/api/v1/lottery/scene-accuracy?days=30').then(r => r.json()).catch(() => ({ scenarios: [] })),
       fetch('/api/v1/lottery/accuracy-trend?days=30').then(r => r.json()).catch(() => ({ trend: [] })),
+      fetch('/api/v1/lottery/calibration-backtest?days=60').then(r => r.json()).catch(() => ({ summary: {} })),
     ])
     dashboardData.value = dash
     modelStatus.value = model
@@ -454,6 +477,7 @@ const loadAll = async () => {
     sceneAccuracy.value = sa.scenarios || []
     baseline.value = sa.baseline || 0
     accuracyTrendData.value = at.trend || []
+    calibrationBacktest.value = cb.summary || {}
   } catch (e) {
     error.value = '加载失败: ' + e.message
   } finally {
@@ -556,6 +580,17 @@ onMounted(loadAll)
 .seg-gap { color: #f59e0b; text-align: right; }
 .seg-gap.high { color: #ef4444; }
 .seg-sample { color: #64748b; text-align: right; }
+
+.cal-backtest { display: flex; flex-direction: column; gap: 6px; }
+.cal-row { display: grid; grid-template-columns: 50px 1fr 60px 40px; gap: 8px; padding: 8px; background: #1e293b; border-radius: 4px; font-size: 11px; align-items: center; }
+.cal-pt { color: #e2e8f0; font-weight: 600; font-family: monospace; }
+.cal-stats { display: flex; gap: 8px; flex-wrap: wrap; }
+.cal-stat { color: #94a3b8; }
+.cal-lift { text-align: right; font-weight: 600; }
+.cal-lift.pos { color: #10b981; }
+.cal-lift.neg { color: #ef4444; }
+.cal-sample { color: #64748b; text-align: right; }
+.cal-note { font-size: 10px; color: #64748b; margin-top: 6px; line-height: 1.4; }
 
 .roi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .roi-item { text-align: center; padding: 12px; background: #1e293b; border-radius: 6px; }
