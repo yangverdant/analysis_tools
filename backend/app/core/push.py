@@ -341,23 +341,23 @@ def _rank_value_bets(predictions: List[dict]) -> List[dict]:
             # === 1. SPF ===
             spf = play_predictions.get('spf', {}) or {}
             spf_probs = spf.get('probabilities', {}) or {}
-            if spf_probs and spf.get('recommendation'):
+            if spf_probs and (spf.get('recommendation') or spf.get('direction')):
+                # odds_baseline已经是概率形式(home_win=0.55等), 不需要1/odds再归一化
                 odds_baseline = pred.get('odds_baseline') or {}
-                prob_keys = {'home_win': '3', 'draw': '1', 'away_win': '0'}
-                implied_probs = None
-                try:
-                    prob_values = [v for k, v in odds_baseline.items() if k in prob_keys and v > 0]
-                    total = sum(1.0 / v for v in prob_values) if prob_values else 0
-                    if total > 0:
-                        implied_probs = {k: (1.0 / v) / total for k, v in odds_baseline.items()
-                                        if k in prob_keys and v > 0}
-                except Exception:
-                    pass
-                rec = str(spf.get('recommendation', ''))
-                # spf_probs可能用 '3'/'1'/'0' 或 'home_win'/'draw'/'away_win' 作键
+                # odds_baseline键: home_win/draw/away_win — 直接是隐含概率
+                rec = str(spf.get('recommendation') or spf.get('direction') or '')
                 key_alt = {'3': 'home_win', '1': 'draw', '0': 'away_win'}.get(rec, rec)
                 model_prob = spf_probs.get(rec) or spf_probs.get(key_alt) or 0
-                implied_prob = (implied_probs or {}).get(key_alt, 0)
+                implied_prob = float(odds_baseline.get(key_alt, 0))
+                # 若odds_baseline存的是小数odds(>1), 转成概率
+                if implied_prob > 1.5:
+                    try:
+                        prob_values = [v for k, v in odds_baseline.items()
+                                      if k in {'home_win', 'draw', 'away_win'} and v > 0]
+                        total = sum(1.0 / v for v in prob_values) if prob_values else 0
+                        implied_prob = (1.0 / implied_prob) / total if total > 0 else 0
+                    except Exception:
+                        pass
                 edge = model_prob - implied_prob if implied_prob > 0 else model_prob - 0.33
                 conf_map = {'high': 0.8, 'medium': 0.6, 'low': 0.4, 'avoid': 0.2}
                 conf_numeric = conf_map.get(spf.get('confidence_level') or spf.get('confidence_tier') or 'medium', 0.5)
@@ -375,21 +375,23 @@ def _rank_value_bets(predictions: List[dict]) -> List[dict]:
 
             # === 2. RQSPF (让球胜平负) ===
             rqspf = play_predictions.get('rqspf', {}) or {}
-            if rqspf.get('recommendation') and rqspf.get('probabilities'):
-                rec = str(rqspf.get('recommendation', ''))
-                probs = rqspf.get('probabilities', {}) or {}
+            rqspf_probs = rqspf.get('probabilities', {}) or {}
+            # rqspf的recommendation字段可能为None, 用direction字段
+            rqspf_rec = str(rqspf.get('recommendation') or rqspf.get('direction') or '')
+            if rqspf_rec and rqspf_probs:
                 market_probs = rqspf.get('market_probabilities') or {}
-                rec_clean = rec.split('+')[0].split('-')[0].strip() if rec else ''
-                model_prob = probs.get(rec) or probs.get(rec_clean) or 0
-                implied_prob = market_probs.get(rec) or market_probs.get(rec_clean) or 0
+                # selection可能是 '3'/'1'/'0'
+                rec_clean = rqspf_rec.split('+')[0].split('-')[0].strip() if rqspf_rec else ''
+                model_prob = rqspf_probs.get(rqspf_rec) or rqspf_probs.get(rec_clean) or 0
+                implied_prob = market_probs.get(rqspf_rec) or market_probs.get(rec_clean) or 0
                 edge = model_prob - implied_prob if implied_prob > 0 else model_prob - 0.33
                 conf_map = {'high': 0.8, 'medium': 0.6, 'low': 0.4, 'avoid': 0.2}
                 conf_numeric = conf_map.get(rqspf.get('confidence_level') or rqspf.get('confidence_tier') or 'medium', 0.5)
                 if model_prob > 0:
                     candidate_bets.append({
                         'play_type': 'rqspf',
-                        'selection': rec,
-                        'selection_cn': rqspf.get('recommendation_cn') or rec,
+                        'selection': rqspf_rec,
+                        'selection_cn': rqspf.get('recommendation_cn') or rqspf.get('direction_cn') or rqspf_rec,
                         'model_prob': model_prob,
                         'implied_prob': implied_prob,
                         'confidence': conf_numeric,
