@@ -144,6 +144,9 @@ def apply_calibration_to_play(db_path: str, play_type: str,
     修改 play['confidence'] 和 play['probability'] 为校准后值
     保留 play['raw_probability'] 作为原始值
 
+    若校准后概率大幅下降(>=0.3), 降级 confidence_level 到 low/avoid,
+    让推送时能过滤掉"模型高信心但历史证明不准"的预测(如 rqspf vhigh档).
+
     Returns: True if applied
     """
     if not isinstance(play, dict):
@@ -165,6 +168,17 @@ def apply_calibration_to_play(db_path: str, play_type: str,
     if 'probability' in play:
         play['probability'] = round(calibrated, 4)
     play['calibration_applied'] = True
+
+    # 大幅下调: 模型高信心但历史证明不准, 降级 confidence_level
+    # 触发条件: 原概率>=0.6(原本高信心)但校准后<0.5(历史证明这个区间准确率<50%)
+    if raw_prob >= 0.6 and calibrated < 0.5:
+        current_level = play.get('confidence_level') or play.get('confidence_tier')
+        if current_level != 'avoid':
+            play['confidence_level'] = 'avoid'
+            play['confidence_tier'] = 'avoid'
+            play['calibration_downgraded'] = True
+            play['calibration_drop'] = round(raw_prob - calibrated, 4)
+
     return True
 
 
