@@ -554,11 +554,16 @@ class OddsfeEventDetailSync:
         except Exception:
             ou_result = None
 
+        # 体彩语境: home_goals_ft = 90分钟比分(不含加时), 加时比分单独存home_goals_90min之后
+        # 但lottery_results表 home_goals_ft 历史上就是90min含义, 保持一致
+        goals_home = home_90 if home_90 is not None else ft_home
+        goals_away = away_90 if away_90 is not None else ft_away
+
         return {
             "lottery_match_id": lottery_row.get("lottery_match_id"),
             "match_id": lottery_row.get("match_id"),
-            "home_goals_ft": ft_home,
-            "away_goals_ft": ft_away,
+            "home_goals_ft": goals_home,
+            "away_goals_ft": goals_away,
             "home_goals_90min": home_90,
             "away_goals_90min": away_90,
             "match_end_type": end_type,
@@ -643,6 +648,11 @@ class OddsfeEventDetailSync:
             "away_goals_ft",
             "home_goals_ht",
             "away_goals_ht",
+            "home_goals_90min",
+            "away_goals_90min",
+            "match_end_type",
+            "penalty_home",
+            "penalty_away",
             "spf_result",
             "bf_result",
             "bqc_result",

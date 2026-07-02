@@ -276,7 +276,9 @@ def _event_fulltime_score(event_data: Dict, parsed: Optional[Dict] = None) -> tu
       - all scores identical, end_type = 'FT'
     """
     event_status = str(event_data.get('event_status') or '').upper()
-    is_et_status = event_status in ('AET', 'AP')
+    event_status_details = str(event_data.get('event_status_details') or '').upper()
+    is_et_status = event_status in ('AET', 'AP') or 'EXTRA_TIME' in event_status_details
+    is_pen_status = event_status == 'AP' or 'PENALTY' in event_status_details
 
     # Aggregate score from event_data (may include penalties for AP)
     home_raw = _safe_int_value(
@@ -347,8 +349,10 @@ def _event_fulltime_score(event_data: Dict, parsed: Optional[Dict] = None) -> tu
 def _parse_score_details(score_details: str) -> Optional[Dict]:
     """Parse oddsfe period scores.
 
-    oddsfe score_details is period based in current data:
-    "(1:2, 0:2)" means first half 1:2, second half 0:2, FT 1:4.
+    oddsfe score_details 格式:
+      "(0:1, 2:1)" — 半场0:1, 下半场2:1, 90分钟2:2
+      "(0:1, 2:1, 1:0)" — 半场0:1, 下半场2:1, 加时1:0, 全场3:2 (AET)
+      "(0:1, 2:1, 0:0 3:4)" — 半场0:1, 下半场2:1, 加时0:0, 点球3:4 (AP)
     """
     if not score_details:
         return None
@@ -362,7 +366,18 @@ def _parse_score_details(score_details: str) -> Optional[Dict]:
         return None
 
     def parse_score(part):
-        nums = part.strip().split(':')
+        """解析比分, 返回 (score_tuple, penalty_tuple_or_None)"""
+        part = part.strip()
+        # 处理 "0:0 3:4" 格式: 加时0:0 + 点球3:4
+        if ' ' in part:
+            et_str, pen_str = part.split(' ', 1)
+            et = _parse_single_score(et_str.strip())
+            pen = _parse_single_score(pen_str.strip())
+            return et, pen
+        return _parse_single_score(part), None
+
+    def _parse_single_score(s):
+        nums = s.strip().split(':')
         if len(nums) == 2:
             try:
                 return int(nums[0]), int(nums[1])
@@ -370,8 +385,14 @@ def _parse_score_details(score_details: str) -> Optional[Dict]:
                 return None
         return None
 
-    scores = [parse_score(p) for p in parts]
-    scores = [s for s in scores if s is not None]
+    scores = []
+    penalties = None
+    for p in parts:
+        score, pen = parse_score(p)
+        if score is not None:
+            scores.append(score)
+            if pen is not None:
+                penalties = pen
 
     result = {}
     if len(scores) >= 1:
@@ -388,6 +409,8 @@ def _parse_score_details(score_details: str) -> Optional[Dict]:
         result['et'] = scores[2]
     if len(scores) >= 4:
         result['pen'] = scores[3]
+    elif penalties is not None:
+        result['pen'] = penalties
 
     return result if result else None
 
