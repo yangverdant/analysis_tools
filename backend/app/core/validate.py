@@ -1770,6 +1770,7 @@ def _compute_tier_from_validation(confidence, probabilities, row, conn, play_typ
         report_row = conn.execute('''
             SELECT report_data FROM lottery_analysis_reports
             WHERE lottery_match_id = ? AND report_type IN ('prediction', 'full')
+              AND (is_stale = 0 OR is_stale IS NULL)
             ORDER BY created_at DESC LIMIT 1
         ''', (match_id,)).fetchone()
         if report_row:

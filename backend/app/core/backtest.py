@@ -177,6 +177,8 @@ def _get_bet_odds(cursor, match_id: str, predicted: str) -> float:
         cursor.execute("""
             SELECT report_data FROM lottery_analysis_reports
             WHERE lottery_match_id = ? AND report_type = 'prediction'
+              AND (is_stale = 0 OR is_stale IS NULL)
+            ORDER BY created_at DESC, rowid DESC
             LIMIT 1
         """, (match_id,))
         row = cursor.fetchone()
