@@ -261,7 +261,7 @@ def _get_today_predictions(db_path: str, today: str, tomorrow: str) -> List[dict
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT ar.lottery_match_id, ar.report_data,
+            SELECT ar.lottery_match_id, ar.report_data, ar.created_at,
                    lm.home_team_cn, lm.away_team_cn, lm.league_name_cn
             FROM lottery_analysis_reports ar
             JOIN lottery_matches lm ON ar.lottery_match_id = lm.lottery_match_id
@@ -270,12 +270,19 @@ def _get_today_predictions(db_path: str, today: str, tomorrow: str) -> List[dict
                 OR (lm.match_date = ? AND substr(lm.match_time, 1, 2) < '12')
             )
             AND ar.report_type IN ('prediction', 'full')
+            AND (ar.is_stale = 0 OR ar.is_stale IS NULL)
+            ORDER BY ar.lottery_match_id, ar.created_at DESC
         """, (today, tomorrow))
         rows = cursor.fetchall()
         conn.close()
 
         results = []
+        seen_matches = set()  # 按 lottery_match_id 去重, 只取最新一份
         for row in rows:
+            mid = row['lottery_match_id']
+            if mid in seen_matches:
+                continue
+            seen_matches.add(mid)
             pred = dict(row)
             try:
                 report = json.loads(pred['report_data']) if isinstance(pred['report_data'], str) else pred['report_data']
