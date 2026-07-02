@@ -248,6 +248,15 @@ class CompetitionRuleEngine:
         else:
             comp_type = self._classify_by_keywords(league_name, is_national)
 
+        # 热身赛识别: 大赛正赛应有明确match_phase, 无phase且league_name含大赛关键词
+        # 数据源(sporttery/oddsfe)常把热身赛标为"世界杯", 需要此降级避免draw_boost偏低
+        if (
+            comp_type == CompetitionType.TOURNAMENT_INTL
+            and not match_phase
+            and is_national
+        ):
+            comp_type = CompetitionType.FRIENDLY_INTL
+
         # Step 3: 判断比赛阶段
         phase = self._infer_phase(match_phase, comp_type)
 
