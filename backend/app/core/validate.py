@@ -2419,8 +2419,11 @@ def _write_next_data_requirements(conn, failure: dict, attribution: dict) -> Non
         logger.debug('write next_data_requirements failed: %s', e)
 
 
-def _attribute_failures(db_path: str, match_dates: list, agent=None) -> dict:
-    """翻车归因 — 规则引擎+Agent增强, 含历史回填"""
+def _attribute_failures(db_path: str, match_dates: list, agent=None, skip_agent: bool = False) -> dict:
+    """翻车归因 — 规则引擎+Agent增强, 含历史回填
+
+    skip_agent=True时只走规则引擎, 不调用Agent(用于API不稳定时保证归因覆盖).
+    """
     attributed = 0
 
     try:
@@ -2456,59 +2459,87 @@ def _attribute_failures(db_path: str, match_dates: list, agent=None) -> dict:
                 failures.append(row)
                 existing_ids.add(key)
 
-        # Agent自动初始化(如果未传入)
-        if agent is None:
+        # Agent自动初始化(如果未传入且未禁用)
+        if agent is None and not skip_agent:
             try:
                 from backend.app.core.agent.client import create_agent
                 agent = create_agent(db_path)
             except Exception:
                 agent = None
+        elif skip_agent:
+            agent = None
 
         for failure in failures:
-            # Step 1: 规则引擎(始终执行，作为基线)
-            attribution = _determine_attribution(conn, failure)
-            attribution = _enrich_attribution_with_next_data(attribution)
+            try:
+                # Step 1: 规则引擎(始终执行，作为基线)
+                attribution = _determine_attribution(conn, failure)
+                attribution = _enrich_attribution_with_next_data(attribution)
 
-            # Step 2: Agent增强归因(如果可用)
-            if agent:
-                try:
-                    agent_attr = _agent_attribution(conn, agent, failure, db_path)
-                    if agent_attr:
-                        attribution['rule_engine_level'] = attribution['level']
-                        attribution['level'] = agent_attr.get('attribution_type', attribution['level'])
-                        attribution['detail'] = agent_attr.get('detail', attribution['detail'])
-                        attribution['actionable'] = int(agent_attr.get('actionable', False))
-                        if agent_attr.get('suggested_action'):
-                            attribution['suggested_action'] = agent_attr['suggested_action']
-                        attribution['agent_confidence'] = agent_attr.get('confidence', 0)
-                except Exception as e:
-                    logger.debug(f'Agent归因失败 {failure.get("lottery_match_id")}: {e}')
+                # Step 2: Agent增强归因(如果可用)
+                if agent:
+                    try:
+                        agent_attr = _agent_attribution(conn, agent, failure, db_path)
+                        if agent_attr:
+                            attribution['rule_engine_level'] = attribution['level']
+                            attribution['level'] = agent_attr.get('attribution_type', attribution['level'])
+                            attribution['detail'] = agent_attr.get('detail', attribution['detail'])
+                            attribution['actionable'] = int(agent_attr.get('actionable', False))
+                            if agent_attr.get('suggested_action'):
+                                attribution['suggested_action'] = agent_attr['suggested_action']
+                            attribution['agent_confidence'] = agent_attr.get('confidence', 0)
+                    except Exception as e:
+                        logger.debug(f'Agent归因失败 {failure.get("lottery_match_id")}: {e}')
 
-            # 更新lottery_validation归因字段(不覆盖scenario_type)
-            cursor.execute("""
-                UPDATE lottery_validation
-                SET attribution = ?, attribution_detail = ?,
-                    actionable = ?
-                WHERE lottery_match_id = ? AND play_type = ?
-            """, (
-                attribution['level'],
-                attribution.get('suggested_action', attribution['detail']),
-                attribution.get('actionable', 0),
-                failure.get('lottery_match_id'),
-                failure.get('play_type', 'spf'),
-            ))
-            _save_foundation_review(conn, failure, attribution)
+                # 更新lottery_validation归因字段(不覆盖scenario_type)
+                cursor.execute("""
+                    UPDATE lottery_validation
+                    SET attribution = ?, attribution_detail = ?,
+                        actionable = ?
+                    WHERE lottery_match_id = ? AND play_type = ?
+                """, (
+                    attribution['level'],
+                    attribution.get('suggested_action', attribution['detail']),
+                    attribution.get('actionable', 0),
+                    failure.get('lottery_match_id'),
+                    failure.get('play_type', 'spf'),
+                ))
+                _save_foundation_review(conn, failure, attribution)
 
-            # Write next_data_requirements for auto-consumption
-            _write_next_data_requirements(conn, failure, attribution)
+                # Write next_data_requirements for auto-consumption
+                _write_next_data_requirements(conn, failure, attribution)
 
-            attributed += 1
+                attributed += 1
+            except sqlite3.OperationalError as e:
+                if 'locked' in str(e).lower():
+                    # DB锁冲突, 等待重试一次
+                    import time as _time
+                    _time.sleep(0.5)
+                    try:
+                        cursor.execute("""
+                            UPDATE lottery_validation
+                            SET attribution = ?, attribution_detail = ?,
+                                actionable = ?
+                            WHERE lottery_match_id = ? AND play_type = ?
+                        """, (
+                            attribution.get('level', 'unknown'),
+                            attribution.get('suggested_action', attribution.get('detail', '')),
+                            attribution.get('actionable', 0),
+                            failure.get('lottery_match_id'),
+                            failure.get('play_type', 'spf'),
+                        ))
+                        attributed += 1
+                    except Exception as e2:
+                        logger.warning(f'归因DB锁重试失败 {failure.get("lottery_match_id")}: {e2}')
+                else:
+                    logger.warning(f'归因DB错误 {failure.get("lottery_match_id")}: {e}')
+            except Exception as e:
+                logger.warning(f'归因失败 {failure.get("lottery_match_id")} {failure.get("play_type")}: {e}')
 
         conn.commit()
         conn.close()
 
     except Exception as e:
-        logger.debug('归因失败: %s', e)
+        logger.warning('归因整体失败: %s', e)
 
     return {'attributed': attributed}
 
@@ -2583,7 +2614,16 @@ def _determine_attribution(conn, failure: dict) -> dict:
     if play_attr:
         return play_attr
 
-    # 6. 概率差距小 → close_match
+    # 6. 高概率预测失败 → model_overconfidence (prob>0.65还错说明过度自信)
+    if prob and prob >= 0.65:
+        actual_label = SPF_LABEL.get(actual, actual) if play_type == 'spf' else actual
+        return {
+            'level': 'model_overconfidence',
+            'detail': f'{_play_label(play_type)}预测概率{prob:.1%}过高, 但实际{actual_label}',
+            'scenario': 'overconfidence',
+        }
+
+    # 7. 概率差距小 → close_match (0.35-0.65 中等概率, 方向对但结果不利)
     if prob and prob > 0.35:
         return {
             'level': 'close_match',
@@ -2591,7 +2631,7 @@ def _determine_attribution(conn, failure: dict) -> dict:
             'scenario': 'close',
         }
 
-    # 7. 概率很低 → bad_luck
+    # 8. 概率很低 → bad_luck
     if prob and prob < 0.20:
         return {
             'level': 'bad_luck',
@@ -2599,7 +2639,7 @@ def _determine_attribution(conn, failure: dict) -> dict:
             'scenario': 'upset',
         }
 
-    # 8. 默认 — model_weight_issue
+    # 9. 默认 — model_weight_issue
     return {
         'level': 'model_weight_issue',
         'detail': f'{_play_label(play_type)}预测概率{prob:.1%}, 数据齐备但权重可能错误',
