@@ -478,29 +478,36 @@ def _generate_reason(bet: dict) -> str:
 
 
 def _record_bets(db_path: str, bets: List[dict]):
-    """写入bet_records表 — 使用体彩实际赔率"""
+    """写入bet_records表 — 使用体彩实际赔率
+
+    去重: 按(lottery_match_id, play_type, selection)唯一, 已存在pending则跳过,
+    已结算的保留. 避免多次daily_cycle触发导致重复投注.
+    """
     try:
         conn = sqlite3.connect(db_path, timeout=10)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
 
-        # 先清理今天pending的旧记录(避免重复)
-        cursor.execute("""
-            DELETE FROM bet_records WHERE result = 'pending'
-            AND lottery_match_id IN (
-                SELECT lottery_match_id FROM lottery_matches WHERE match_date = date('now')
-            )
-        """)
-
         for bet in bets:
             lm_id = bet.get('lottery_match_id')
             selection = bet.get('selection', '')
             play_type = bet.get('play_type', 'spf')
+            if not lm_id or not selection:
+                continue
+
+            # 检查是否已有该场该玩法的投注(pending或已结算都算)
+            existing = cursor.execute("""
+                SELECT id FROM bet_records
+                WHERE lottery_match_id = ? AND play_type = ? AND selection = ?
+                LIMIT 1
+            """, (lm_id, play_type, str(selection))).fetchone()
+            if existing:
+                continue  # 已存在, 跳过
 
             # 从lottery_odds获取体彩实际赔率
             real_odds = _get_real_odds(cursor, lm_id, play_type, selection)
             if not real_odds:
-                real_odds = bet.get('prob', 0)  # fallback: 用概率
+                real_odds = bet.get('model_prob', 0)  # fallback: 用概率(旧字段prob已改名)
 
             # 虚拟投注: 基础100元, Kelly比例调整
             kelly = bet.get('kelly', 0)
@@ -514,7 +521,7 @@ def _record_bets(db_path: str, bets: List[dict]):
                 bet.get('prediction_id'),
                 lm_id,
                 play_type,
-                selection,
+                str(selection),
                 real_odds,
                 stake,
             ))
@@ -522,7 +529,7 @@ def _record_bets(db_path: str, bets: List[dict]):
         conn.commit()
         conn.close()
     except Exception as e:
-        logger.debug('Bet记录失败: %s', e)
+        logger.warning('Bet记录失败: %s', e)
 
 
 def _get_real_odds(cursor, lottery_match_id: str, play_type: str, selection: str) -> float:
