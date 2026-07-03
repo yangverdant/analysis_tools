@@ -135,7 +135,7 @@ class AnalystAgent:
 
         if api_key and api_key != "ANTHROPIC_API_KEY_PLACEHOLDER":
             try:
-                client_kwargs = {"api_key": api_key}
+                client_kwargs = {"api_key": api_key, "timeout": 30.0}
                 if base_url:
                     client_kwargs["base_url"] = base_url
                 self._anthropic_client = anthropic.Anthropic(**client_kwargs)

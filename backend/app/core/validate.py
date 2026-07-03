@@ -2469,6 +2469,8 @@ def _attribute_failures(db_path: str, match_dates: list, agent=None, skip_agent:
         elif skip_agent:
             agent = None
 
+        consecutive_agent_failures = 0  # 连续失败计数, 达3次自动禁用Agent
+
         for failure in failures:
             try:
                 # Step 1: 规则引擎(始终执行，作为基线)
@@ -2487,8 +2489,17 @@ def _attribute_failures(db_path: str, match_dates: list, agent=None, skip_agent:
                             if agent_attr.get('suggested_action'):
                                 attribution['suggested_action'] = agent_attr['suggested_action']
                             attribution['agent_confidence'] = agent_attr.get('confidence', 0)
+                            consecutive_agent_failures = 0
+                        else:
+                            consecutive_agent_failures += 1
                     except Exception as e:
+                        consecutive_agent_failures += 1
                         logger.debug(f'Agent归因失败 {failure.get("lottery_match_id")}: {e}')
+                        # 连续3次失败, 自动禁用Agent剩余调用
+                        if consecutive_agent_failures >= 3:
+                            logger.warning('Agent连续%d次失败/超时, 自动切换到skip_agent模式',
+                                           consecutive_agent_failures)
+                            agent = None
 
                 # 更新lottery_validation归因字段(不覆盖scenario_type)
                 cursor.execute("""
