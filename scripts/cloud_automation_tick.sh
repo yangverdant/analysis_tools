@@ -30,6 +30,8 @@ export PYTHONUNBUFFERED=1
     sqlite3 "$DB_PATH" "PRAGMA busy_timeout=30000; PRAGMA journal_mode=WAL;" || true
     sqlite3 "$ODDSFE_DB_PATH" "PRAGMA busy_timeout=30000; PRAGMA journal_mode=WAL;" || true
   fi
+  # Sporttery future-match sync — 90min dedupe via collection_runs
+  "$ROOT/venv/bin/python" "$ROOT/scripts/cloud_tick_sporttery_sync.py" 2>&1 | head -10 || true
   timeout "${FOOTBALL_AUTOMATION_TIMEOUT:-12m}" \
     flock -n "$LOCK_FILE" \
     "$ROOT/venv/bin/python" "$ROOT/scripts/run_automation_center.py" \

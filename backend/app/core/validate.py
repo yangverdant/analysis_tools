@@ -2565,10 +2565,21 @@ def _determine_attribution(conn, failure: dict) -> dict:
     confidence = _safe_float(failure.get('confidence'), 0.0)
     confidence_level = str(failure.get('confidence_level') or 'low')
 
-    # 1. 低置信噪声 — 置信度极低的错误优先归因
-    #    注意: confidence=0.5通常是默认值(未设置), 不算低置信
-    #    真正低置信: confidence < 0.35 且非默认0.5
-    is_low_conf = (confidence > 0 and confidence < 0.35) or (confidence_level == 'low' and confidence > 0 and confidence < 0.5)
+    # 1. 赔率方向检查 — market_misread(赔率对但模型反了)优先于低置信判定
+    #    原因: pred=3 actual=0的反向猜错, 即使置信度<0.35, 本质也是"赔率暗示对了模型反了"
+    #    归到low_confidence_noise会丢失这条可执行的信号
+    odds_direction = _get_odds_direction(conn, match_id)
+    if odds_direction and odds_direction == actual and predicted != actual and play_type == 'spf':
+        return {
+            'level': 'market_misread',
+            'detail': f'赔率暗示{SPF_LABEL.get(odds_direction, odds_direction)}, 模型预测{SPF_LABEL.get(predicted, predicted)}, 实际{SPF_LABEL.get(actual, actual)}',
+            'scenario': 'market_divergence',
+        }
+
+    # 2. 低置信噪声 — 真正低置信(conf<0.35)才算噪声
+    #    收紧条件: 去掉"confidence_level=='low' AND conf<0.5"这条冗余路径
+    #    因为对spf三选一, 0.35-0.43是正常概率, 不该算低置信噪声
+    is_low_conf = (confidence > 0 and confidence < 0.35)
     if is_low_conf:
         return {
             'level': 'low_confidence_noise',
@@ -2576,7 +2587,7 @@ def _determine_attribution(conn, failure: dict) -> dict:
             'scenario': 'low_confidence',
         }
 
-    # 2. 情报缺失检查 — 按缺失类型细化
+    # 3. 情报缺失检查 — 按缺失类型细化
     intel_check = _check_intel_completeness(conn, match_id)
     if intel_check.get('is_missing'):
         missing_keys = intel_check.get('missing_keys', [])
@@ -2602,22 +2613,13 @@ def _determine_attribution(conn, failure: dict) -> dict:
             'missing_keys': missing_keys,
         }
 
-    # 3. 赛事上下文检查
+    # 4. 赛事上下文检查
     scenario_type = str(failure.get('scenario_type') or '')
     if scenario_type in ('friendly_intl',):
         return {
             'level': 'tournament_context_misread',
             'detail': f'友谊赛上下文未正确应用, {_play_label(play_type)}预测{predicted}实际{actual}',
             'scenario': 'context_mismatch',
-        }
-
-    # 4. 赔率方向检查 — market_misread(赔率对但模型反了)
-    odds_direction = _get_odds_direction(conn, match_id)
-    if odds_direction and odds_direction == actual and predicted != actual and play_type == 'spf':
-        return {
-            'level': 'market_misread',
-            'detail': f'赔率暗示{SPF_LABEL.get(odds_direction, odds_direction)}, 模型预测{SPF_LABEL.get(predicted, predicted)}, 实际{SPF_LABEL.get(actual, actual)}',
-            'scenario': 'market_divergence',
         }
 
     # 5. 玩法特定归因

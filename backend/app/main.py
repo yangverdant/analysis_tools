@@ -1965,10 +1965,31 @@ def _start_daily_scheduler():
             )
 
             try:
-                summary["sporttery"] = {
-                    "skipped": True,
-                    "reason": "high-frequency loop keeps to lightweight status/result/intelligence work; full sporttery sync remains in daily/manual flow",
-                }
+                # 采集未来2天sporttery比赛(明/后天), 让cockpit提前准备赔率/情报/分析
+                # 避免高频循环重复爬, 用_collection_running去重(90分钟窗口)
+                sporttery_summaries = []
+                if _collection_running("sporttery_daily_matches", max_age_minutes=90):
+                    summary["sporttery"] = {"skipped": True, "reason": "existing sporttery_daily_matches run active"}
+                else:
+                    from backend.app.lottery.services.sync_service import LotterySyncService
+                    sync_service = LotterySyncService(db_path)
+                    for future_offset in (1, 2):
+                        try:
+                            future_date = _beijing_date(future_offset)
+                            result = sync_service.sync_daily_matches(
+                                match_date=future_date,
+                                bridge_oddsfe=False,
+                                trigger_source="scheduler_rolling_sporttery",
+                            )
+                            sporttery_summaries.append({"date": future_date.isoformat(), "result": result})
+                        except Exception as e:
+                            logger.warning("Rolling sporttery sync failed for %s: %s", future_offset, e)
+                            sporttery_summaries.append({"date": str(future_date), "error": str(e)})
+                    try:
+                        sync_service.close()
+                    except Exception:
+                        pass
+                    summary["sporttery"] = {"batches": sporttery_summaries}
 
                 summary["status"] = _update_match_status(db_path)
 
