@@ -2112,6 +2112,24 @@ const LotteryAnalysisDetail = defineComponent({
             ])
           ))
         ]) : null,
+        wcStage.finished_fixtures?.length ? h('div', { class: 'ad-wc-sub ad-wc-finished' }, [
+          h('div', { class: 'ad-wc-sub-title' }, '本组已完赛'),
+          h('div', { class: 'ad-wc-fixtures' }, wcStage.finished_fixtures.slice(0, 4).map(f => {
+            const score = f.score || {}
+            const homeScore = score.home_ft ?? score.home
+            const awayScore = score.away_ft ?? score.away
+            const hasScore = homeScore != null && awayScore != null
+            const homeWon = hasScore && Number(homeScore) > Number(awayScore)
+            const awayWon = hasScore && Number(awayScore) > Number(homeScore)
+            return h('div', { class: 'ad-wc-fixture' + (hasScore ? ' ad-wc-fixture-done' : '') }, [
+              h('span', null, '第' + (f.matchday || '?') + '轮'),
+              h('b', { class: homeWon ? 'ad-wc-winner' : '' }, (f.home_team_cn || f.home_team || '-')),
+              h('span', { class: 'ad-wc-score' }, hasScore ? (homeScore + ' - ' + awayScore) : 'vs'),
+              h('b', { class: awayWon ? 'ad-wc-winner' : '' }, (f.away_team_cn || f.away_team || '-')),
+              h('span', null, (f.date || '').slice(5))
+            ])
+          }))
+        ]) : null,
         wcStage.remaining_fixtures?.length ? h('div', { class: 'ad-wc-sub' }, [
           h('div', { class: 'ad-wc-sub-title' }, '同组关键余赛'),
           h('div', { class: 'ad-wc-fixtures' }, wcStage.remaining_fixtures.slice(0, 2).map(f =>
@@ -9869,6 +9887,24 @@ const futureReanalysisExampleText = (run, persistedChanges = []) => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.ad-wc-fixture-done {
+  grid-template-columns: 38px minmax(0, 1fr) 48px minmax(0, 1fr) 36px;
+  background: rgba(34,197,94,0.04);
+  border-color: rgba(34,197,94,0.10);
+}
+.ad-wc-fixture-done .ad-wc-score {
+  color: #fbbf24;
+  font-weight: 600;
+  text-align: center;
+  font-size: 12px;
+}
+.ad-wc-fixture-done .ad-wc-winner {
+  color: #4ade80;
+  font-weight: 600;
+}
+.ad-wc-finished .ad-wc-sub-title {
+  color: #4ade80;
 }
 .ad-wc-slot {
   display: flex;

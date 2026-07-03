@@ -290,6 +290,7 @@ class WorldCupContextService:
                 "group_matches_total": (group or {}).get("matches_total", 0),
                 "remaining_fixtures": self._remaining_group_fixtures(group, match),
                 "same_matchday_fixtures": self._same_matchday_fixtures(group, match),
+                "finished_fixtures": self._finished_group_fixtures(group, match),
             },
             "third_place_context": {
                 "status": context["third_place_table"].get("status"),
@@ -348,6 +349,21 @@ class WorldCupContextService:
                 continue
             if fixture.get("matchday") == current_match.get("matchday"):
                 rows.append(self._fixture_compact(fixture))
+        return rows
+
+    def _finished_group_fixtures(self, group: Optional[Dict[str, Any]], current_match: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """本组已完赛比赛(含比分) — 倒序, 最近完成的在前"""
+        if not group:
+            return []
+        current_id = str(current_match.get("match_id") or "")
+        rows = []
+        for fixture in group.get("fixtures") or []:
+            if str(fixture.get("match_id") or "") == current_id:
+                continue
+            if self._is_finished(fixture):
+                rows.append(self._fixture_compact(fixture))
+        # 倒序: 最近完赛的在前(按date+time)
+        rows.sort(key=lambda f: (f.get("date") or "", f.get("time") or ""), reverse=True)
         return rows
 
     def _fixture_compact(self, match: Dict[str, Any]) -> Dict[str, Any]:
