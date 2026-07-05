@@ -30,8 +30,15 @@ export PYTHONUNBUFFERED=1
     sqlite3 "$DB_PATH" "PRAGMA busy_timeout=30000; PRAGMA journal_mode=WAL;" || true
     sqlite3 "$ODDSFE_DB_PATH" "PRAGMA busy_timeout=30000; PRAGMA journal_mode=WAL;" || true
   fi
-  # Sporttery future-match sync — 90min dedupe via collection_runs
-  "$ROOT/venv/bin/python" "$ROOT/scripts/cloud_tick_sporttery_sync.py" 2>&1 | head -10 || true
+  # oddsfe schedule sync — primary source since sporttery WAF ban (2026-07-04)
+  # Fetches future 3 days of mainstream-league matches with whitelist filter
+  "$ROOT/venv/bin/python" "$ROOT/scripts/oddsfe_schedule_to_lottery.py" 2>&1 | grep -E 'oddsfe_schedule_sync|total_inserted' | tail -5 || true
+  # Backfill oddsfe_event_id for existing rows without one (so results supplement can run)
+  "$ROOT/venv/bin/python" "$ROOT/scripts/oddsfe_eid_backfill.py" 2>&1 | grep -E 'backfill|updated|done' | tail -5 || true
+  # oddsfe results supplement — backfill FT/HT/BQC for matches finished in last 4 days
+  "$ROOT/venv/bin/python" "$ROOT/scripts/oddsfe_results_supplement.py" 2>&1 | grep -E 'supplement|done' | tail -5 || true
+  # Sporttery sync — best-effort fallback (will likely 403/captcha, silently skip)
+  "$ROOT/venv/bin/python" "$ROOT/scripts/cloud_tick_sporttery_sync.py" 2>&1 | grep -E 'sync|saved|skip' | tail -5 || true
   timeout "${FOOTBALL_AUTOMATION_TIMEOUT:-12m}" \
     flock -n "$LOCK_FILE" \
     "$ROOT/venv/bin/python" "$ROOT/scripts/run_automation_center.py" \
