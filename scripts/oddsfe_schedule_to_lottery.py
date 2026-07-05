@@ -352,17 +352,40 @@ def sync_oddsfe_matches_to_lottery(target_date: date, trigger_source: str = "odd
             if existing:
                 # Update existing row in place — keep its lottery_match_id to
                 # avoid breaking child rows (predictions, results, bets).
-                old_id, old_date, old_home = existing
+                # CN-name handling: if existing home_team_cn is EN-only (no CJK)
+                # but the new value has CJK (better translation), overwrite it.
+                # This lets the system gradually upgrade EN->CN as name_cn
+                # translations are learned/persisted.
+                old_id = existing[0]
+                new_home = fields["home_team_cn"]
+                new_away = fields["away_team_cn"]
+                new_home_has_cjk = bool(new_home) and any("一" <= c <= "鿿" for c in new_home)
+                new_away_has_cjk = bool(new_away) and any("一" <= c <= "鿿" for c in new_away)
+                old_home = existing[2] or ""
+                old_home_has_cjk = bool(old_home) and any("一" <= c <= "鿿" for c in old_home)
+
+                # Read old_away in the same pass so we can decide the away_clause.
+                old_away_row = cursor.execute(
+                    "SELECT away_team_cn FROM lottery_matches WHERE lottery_match_id = ?",
+                    (old_id,)
+                ).fetchone()
+                old_away = (old_away_row[0] if old_away_row else "") or ""
+                old_away_has_cjk = bool(old_away) and any("一" <= c <= "鿿" for c in old_away)
+
+                home_clause = ("home_team_cn = ?" if (new_home_has_cjk and not old_home_has_cjk)
+                               else "home_team_cn = COALESCE(NULLIF(home_team_cn, ''), ?)")
+                away_clause = ("away_team_cn = ?" if (new_away_has_cjk and not old_away_has_cjk)
+                               else "away_team_cn = COALESCE(NULLIF(away_team_cn, ''), ?)")
+
                 cursor.execute(
-                    "UPDATE lottery_matches SET "
+                    f"UPDATE lottery_matches SET "
                     "match_date = ?, match_time = ?, beijing_time = ?, "
-                    "home_team_cn = COALESCE(NULLIF(home_team_cn, ''), ?), "
-                    "away_team_cn = COALESCE(NULLIF(away_team_cn, ''), ?), "
+                    f"{home_clause}, {away_clause}, "
                     "league_name_cn = COALESCE(NULLIF(league_name_cn, ''), ?), "
                     "updated_at = CURRENT_TIMESTAMP "
                     "WHERE lottery_match_id = ?",
                     (fields["match_date"], fields["match_time"], fields["beijing_time"],
-                     fields["home_team_cn"], fields["away_team_cn"], fields["league_name_cn"],
+                     new_home, new_away, fields["league_name_cn"],
                      old_id)
                 )
                 updated += 1

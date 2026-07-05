@@ -37,6 +37,8 @@ export PYTHONUNBUFFERED=1
   "$ROOT/venv/bin/python" "$ROOT/scripts/oddsfe_eid_backfill.py" 2>&1 | grep -E 'backfill|updated|done' | tail -5 || true
   # oddsfe results supplement — backfill FT/HT/BQC for matches finished in last 4 days
   "$ROOT/venv/bin/python" "$ROOT/scripts/oddsfe_results_supplement.py" 2>&1 | grep -E 'supplement|done' | tail -5 || true
+  # Backfill lottery_odds.spf from oddsfe 1X2 prematch odds (Pinnacle) — covers WAF-ban gap
+  "$ROOT/venv/bin/python" "$ROOT/scripts/oddsfe_spf_odds_backfill.py" 2>&1 | grep -E 'oddsfe_spf_backfill|total_inserted' | tail -5 || true
   # Sporttery sync — best-effort fallback (will likely 403/captcha, silently skip)
   "$ROOT/venv/bin/python" "$ROOT/scripts/cloud_tick_sporttery_sync.py" 2>&1 | grep -E 'sync|saved|skip' | tail -5 || true
   timeout "${FOOTBALL_AUTOMATION_TIMEOUT:-12m}" \
