@@ -133,26 +133,129 @@ def _resolve_league_cn(tournament: str, category: str) -> Optional[str]:
 
 
 def _cn_team_name(conn: sqlite3.Connection, name_en: str) -> str:
-    """Translate EN team name to CN via teams table + team_aliases fallback."""
+    """Translate EN team name to CN via teams table + team_aliases fallback.
+
+    5-layer matching:
+    1. Direct exact match on teams.name_en
+    2. team_aliases.alias_name exact match
+    3. Case-insensitive exact match
+    4. Fuzzy: teams.name_en contains the input as a word (handles "Seoul" -> "FC Seoul")
+    5. Fallback: return EN as-is
+    """
     if not name_en:
         return ""
+    # 1. Direct match
     row = conn.execute(
         "SELECT name_cn FROM teams WHERE name_en = ? LIMIT 1", (name_en,)
     ).fetchone()
     if row and row[0]:
         return row[0]
+    # 2. team_aliases
     row = conn.execute(
         "SELECT t.name_cn FROM teams t JOIN team_aliases a ON t.team_id = a.team_id "
         "WHERE a.alias_name = ? LIMIT 1", (name_en,)
     ).fetchone()
     if row and row[0]:
         return row[0]
+    # 3. Case-insensitive
     row = conn.execute(
         "SELECT name_cn FROM teams WHERE name_en = ? COLLATE NOCASE LIMIT 1", (name_en,)
     ).fetchone()
     if row and row[0]:
         return row[0]
+    # 4. Fuzzy: name_en contains input as a whole word (e.g. "Seoul" matches "FC Seoul")
+    #    Skip very short inputs (<3 chars) to avoid false positives like "FC"
+    if len(name_en) >= 3:
+        row = conn.execute(
+            "SELECT name_cn FROM teams "
+            "WHERE name_en LIKE ? AND name_cn IS NOT NULL AND name_cn != '' "
+            "ORDER BY LENGTH(name_en) ASC LIMIT 1",
+            (f"% {name_en} %",)
+        ).fetchone()
+        if not row:
+            row = conn.execute(
+                "SELECT name_cn FROM teams "
+                "WHERE (name_en LIKE ? OR name_en LIKE ? OR name_en LIKE ?) "
+                "AND name_cn IS NOT NULL AND name_cn != '' "
+                "ORDER BY LENGTH(name_en) ASC LIMIT 1",
+                (f"% {name_en}", f"{name_en} %", f"% {name_en} %")
+            ).fetchone()
+        if row and row[0]:
+            return row[0]
     return name_en
+
+
+def _persist_team_name_cn(conn: sqlite3.Connection, name_en: str, name_cn: str) -> bool:
+    """Persist learned EN->CN mapping into teams.name_cn (if currently NULL).
+
+    Returns True if a row was updated. This is how the system "memorizes" team
+    name translations over time — each tick learns a few more mappings, so the
+    teams table gradually fills in name_cn for leagues oddsfe covers.
+    """
+    if not name_en or not name_cn or name_en == name_cn:
+        return False
+    # Only update if name_cn is currently NULL/empty (don't overwrite existing CN)
+    cur = conn.execute(
+        "UPDATE teams SET name_cn = ? WHERE name_en = ? AND (name_cn IS NULL OR name_cn = '')",
+        (name_cn, name_en)
+    )
+    if cur.rowcount > 0:
+        # Also add to team_aliases if not present
+        row = conn.execute("SELECT team_id FROM teams WHERE name_en = ?", (name_en,)).fetchone()
+        if row:
+            tid = row[0]
+            exists = conn.execute(
+                "SELECT 1 FROM team_aliases WHERE team_id=? AND alias_name=?", (tid, name_en)
+            ).fetchone()
+            if not exists:
+                conn.execute(
+                    "INSERT INTO team_aliases (team_id, alias_name, source) VALUES (?, ?, 'oddsfe_learned')",
+                    (tid, name_en)
+                )
+        return True
+    return False
+
+
+def _learn_team_names_from_history(conn: sqlite3.Connection,
+                                    schedule_by_date: Dict[str, List[Dict]]) -> int:
+    """Learn EN->CN team name mappings from historical lottery_matches rows
+    that have both home_team_cn (CN) and oddsfe_event_id. Cross-reference with
+    schedule to find the oddsfe EN team name for that event.
+
+    Persists each learned mapping into teams.name_cn (if NULL) so future runs
+    don't need to relearn. This is the "memory" mechanism: each tick learns
+    a few more team name translations.
+    """
+    from datetime import date, timedelta
+    learned = 0
+    today = date.today()
+    for offset in range(-30, 2):
+        d = today + timedelta(days=offset)
+        ds = d.strftime("%Y-%m-%d")
+        rows = conn.execute(
+            "SELECT home_team_cn, away_team_cn, oddsfe_event_id FROM lottery_matches "
+            "WHERE match_date=? AND oddsfe_event_id IS NOT NULL",
+            (ds,)
+        ).fetchall()
+        if not rows:
+            continue
+        events = schedule_by_date.get(ds, [])
+        if not events:
+            continue
+        eid_to_ev = {str(e.get("event_id")): e for e in events}
+        for home_cn, away_cn, eid in rows:
+            e = eid_to_ev.get(str(eid))
+            if not e:
+                continue
+            eh = e.get("team_home_name","")
+            ea = e.get("team_away_name","")
+            if home_cn and eh and home_cn != eh and any("一" <= c <= "鿿" for c in home_cn):
+                if _persist_team_name_cn(conn, eh, home_cn):
+                    learned += 1
+            if away_cn and ea and away_cn != ea and any("一" <= c <= "鿿" for c in away_cn):
+                if _persist_team_name_cn(conn, ea, away_cn):
+                    learned += 1
+    return learned
 
 
 def _to_beijing_time(start_at: str) -> str:
@@ -224,6 +327,7 @@ def sync_oddsfe_matches_to_lottery(target_date: date, trigger_source: str = "odd
     inserted = 0
     skipped = 0
     filtered_out = 0
+    updated = 0
 
     for event in events:
         try:
@@ -235,51 +339,93 @@ def sync_oddsfe_matches_to_lottery(target_date: date, trigger_source: str = "odd
                 skipped += 1
                 continue
 
-            cursor.execute(
-                """INSERT OR IGNORE INTO lottery_matches
-                   (lottery_match_id, home_team_cn, away_team_cn, league_name_cn,
-                    match_num, match_date, match_time, beijing_time, sell_status,
-                    play_types, handicap_line, oddsfe_event_id, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
-                (
-                    fields["lottery_match_id"],
-                    fields["home_team_cn"],
-                    fields["away_team_cn"],
-                    fields["league_name_cn"],
-                    fields["match_num"],
-                    fields["match_date"],
-                    fields["match_time"],
-                    fields["beijing_time"],
-                    fields["sell_status"],
-                    fields["play_types"],
-                    fields["handicap_line"],
-                    fields["oddsfe_event_id"],
-                ),
-            )
-            if cursor.rowcount > 0:
-                inserted += 1
-            else:
+            # Use oddsfe_event_id as the natural unique key, NOT lottery_match_id.
+            # This prevents cross-date duplicates: same event appearing in both
+            # 7/5 and 7/6 schedules (because beijing_time crosses midnight) would
+            # get different lottery_match_ids but the same oddsfe_event_id.
+            existing = cursor.execute(
+                "SELECT lottery_match_id, match_date, home_team_cn FROM lottery_matches "
+                "WHERE oddsfe_event_id = ? LIMIT 1",
+                (fields["oddsfe_event_id"],)
+            ).fetchone()
+
+            if existing:
+                # Update existing row in place — keep its lottery_match_id to
+                # avoid breaking child rows (predictions, results, bets).
+                old_id, old_date, old_home = existing
                 cursor.execute(
-                    "UPDATE lottery_matches SET oddsfe_event_id = COALESCE(oddsfe_event_id, ?), "
-                    "beijing_time = COALESCE(beijing_time, ?), "
+                    "UPDATE lottery_matches SET "
+                    "match_date = ?, match_time = ?, beijing_time = ?, "
+                    "home_team_cn = COALESCE(NULLIF(home_team_cn, ''), ?), "
+                    "away_team_cn = COALESCE(NULLIF(away_team_cn, ''), ?), "
                     "league_name_cn = COALESCE(NULLIF(league_name_cn, ''), ?), "
                     "updated_at = CURRENT_TIMESTAMP "
-                    "WHERE lottery_match_id = ? AND oddsfe_event_id IS NULL",
-                    (fields["oddsfe_event_id"], fields["beijing_time"],
-                     fields["league_name_cn"], fields["lottery_match_id"]),
+                    "WHERE lottery_match_id = ?",
+                    (fields["match_date"], fields["match_time"], fields["beijing_time"],
+                     fields["home_team_cn"], fields["away_team_cn"], fields["league_name_cn"],
+                     old_id)
                 )
-                skipped += 1
+                updated += 1
+            else:
+                cursor.execute(
+                    """INSERT OR IGNORE INTO lottery_matches
+                       (lottery_match_id, home_team_cn, away_team_cn, league_name_cn,
+                        match_num, match_date, match_time, beijing_time, sell_status,
+                        play_types, handicap_line, oddsfe_event_id, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+                    (
+                        fields["lottery_match_id"],
+                        fields["home_team_cn"],
+                        fields["away_team_cn"],
+                        fields["league_name_cn"],
+                        fields["match_num"],
+                        fields["match_date"],
+                        fields["match_time"],
+                        fields["beijing_time"],
+                        fields["sell_status"],
+                        fields["play_types"],
+                        fields["handicap_line"],
+                        fields["oddsfe_event_id"],
+                    ),
+                )
+                if cursor.rowcount > 0:
+                    inserted += 1
+                else:
+                    skipped += 1
         except Exception as exc:
             logger.warning("insert failed for event %s: %s", event.get("event_id"), exc)
             skipped += 1
 
     conn.commit()
+
+    # Learn team name mappings from history + persist into teams.name_cn.
+    # Wider window (30 days) than the sync window (3 days) so we can learn
+    # mappings from matches that happened earlier this month.
+    try:
+        from backend.app.lottery.services.sync_service import _oddsfe_fetch_schedule
+        from datetime import date as _date, timedelta as _td
+        schedule_30d: Dict[str, List[Dict]] = {}
+        today = _date.today()
+        for off in range(-30, 2):
+            d = today + _td(days=off)
+            ds = d.strftime("%Y-%m-%d")
+            try:
+                schedule_30d[ds] = _oddsfe_fetch_schedule(ds)
+            except Exception:
+                pass
+        learned = _learn_team_names_from_history(conn, schedule_30d)
+        if learned:
+            logger.info("learned %d team name mappings into teams.name_cn", learned)
+    except Exception as exc:
+        logger.warning("learn_team_names failed: %s", exc)
+
     conn.close()
 
     result = {
         "date": str(target_date),
         "fetched": len(events),
         "inserted": inserted,
+        "updated": updated,
         "skipped": skipped,
         "filtered": filtered_out,
     }

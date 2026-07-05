@@ -2012,6 +2012,20 @@ class LotterySyncService:
 
             event_data = _oddsfe_fetch_score_details(eid)
             event_status = str(event_data.get('event_status') or '').upper()
+            # POSTPONED/CANCELLED — mark sell_status so UI doesn't say "已结束(待同步)"
+            if event_status in ('POSTPONED', 'CANCELED', 'CANCELLED', 'ABANDONED', 'SUSPENDED'):
+                try:
+                    conn2 = sqlite3.connect(self.db_path)
+                    conn2.execute(
+                        "UPDATE lottery_matches SET sell_status = 'postponed', "
+                        "updated_at = CURRENT_TIMESTAMP WHERE lottery_match_id = ?",
+                        (lm_id,)
+                    )
+                    conn2.commit()
+                    conn2.close()
+                except Exception:
+                    pass
+                continue
             if event_status and event_status not in ('FINISHED', 'FT', 'ENDED', 'AET', 'AP'):
                 continue
             score_details = event_data.get('score_details', '')
@@ -2129,6 +2143,20 @@ class LotterySyncService:
             # ��ȡ oddsfe event ����
             event_data = _oddsfe_fetch_score_details(eid)
             event_status = str(event_data.get('event_status') or '').upper()
+            # POSTPONED/CANCELLED — mark sell_status so UI doesn't say "已结束(待同步)"
+            if event_status in ('POSTPONED', 'CANCELED', 'CANCELLED', 'ABANDONED', 'SUSPENDED'):
+                try:
+                    conn2 = sqlite3.connect(self.db_path)
+                    conn2.execute(
+                        "UPDATE lottery_matches SET sell_status = 'postponed', "
+                        "updated_at = CURRENT_TIMESTAMP WHERE lottery_match_id = ?",
+                        (lm_id,)
+                    )
+                    conn2.commit()
+                    conn2.close()
+                except Exception:
+                    pass
+                continue
             if event_status and event_status not in ('FINISHED', 'FT', 'ENDED', 'AET', 'AP'):
                 continue
             score_details = event_data.get('score_details', '')

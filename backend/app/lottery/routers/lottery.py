@@ -1336,21 +1336,16 @@ async def get_lottery_matches(
         params = []
 
         if date:
-            # World Cup rows can arrive with UTC/source dates while the UI is grouped by Beijing date.
-            # Pull a narrow 3-day window, correct World Cup display time, then filter below.
-            try:
-                target_day = datetime.strptime(date, "%Y-%m-%d").date()
-                date_start = (target_day - timedelta(days=1)).isoformat()
-                date_end = (target_day + timedelta(days=1)).isoformat()
-            except ValueError:
-                date_start = date_end = date
+            # Filter by Beijing-time date (single day). beijing_time is stored
+            # as 'YYYY-MM-DD HH:MM:SS' so substr(..,1,10) gives the Beijing date.
+            # If beijing_time is NULL, fall back to match_date.
             query += """
             AND (
-                substr(beijing_time, 1, 10) BETWEEN ? AND ?
-                OR (beijing_time IS NULL AND match_date BETWEEN ? AND ?)
+                substr(beijing_time, 1, 10) = ?
+                OR (beijing_time IS NULL AND match_date = ?)
             )
             """
-            params.extend([date_start, date_end, date_start, date_end])
+            params.extend([date, date])
         else:
             # 默认今天和未来7天 (based on beijing_time or match_date)
             query += " AND (beijing_time >= datetime('now', '-6 hours') OR (beijing_time IS NULL AND match_date >= date('now')))"
