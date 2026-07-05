@@ -57,7 +57,7 @@
             <span class="notification-dot"></span>
           </button>
           <div class="user-avatar">
-            <img src="https://i.pravatar.cc/100?img=11" alt="User" />
+            <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100' viewBox='0 0 100 100'><rect width='100' height='100' fill='%234f8cff'/><text x='50' y='58' font-size='48' fill='white' text-anchor='middle' font-family='sans-serif'>U</text></svg>" alt="User" />
           </div>
         </div>
       </header>
@@ -221,13 +221,13 @@ export default {
     const startAutoSync = async () => {
       try {
         syncStatus.value = { status: 'syncing', message: '正在同步数据...' }
-        const response = await fetch('/api/v1/sync/start', {
+        const response = await fetch('/api/v1/sync/full', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' }
         })
         const data = await response.json()
         if (data.success) {
-          syncStatus.value = { status: 'done', message: `同步完成：更新${data.finished_matches?.updated || 0}场，新增${data.future_matches?.inserted || 0}场` }
+          syncStatus.value = { status: 'done', message: data.message || '同步任务已启动' }
           // 3秒后清除状态
           setTimeout(() => { syncStatus.value = null }, 3000)
         } else {
