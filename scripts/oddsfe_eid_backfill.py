@@ -227,11 +227,31 @@ def backfill_one_date(target_date_str: str, conn: sqlite3.Connection,
             resolved = _resolve_league_cn(t, c)
             league_to_set = resolved if resolved and (not league_cn or
                              league_cn not in __import__("oddsfe_schedule_to_lottery").LEAGUE_WHITELIST) else league_cn
-            conn.execute(
-                "UPDATE lottery_matches SET oddsfe_event_id=?, league_name_cn=?, "
-                "updated_at=CURRENT_TIMESTAMP WHERE lottery_match_id=?",
-                (eid, league_to_set, lm_id)
-            )
+            # Also sync beijing_time/match_date/match_time from oddsfe event_start_at.
+            # sporttery-era rows often carry wrong times (sporttery used CN local
+            # times that drifted from oddsfe's UTC start). Without this, the row
+            # keeps the stale time even after we pair it with the authoritative eid,
+            # which surfaces as "duplicate" matches with wrong kickoff times.
+            from oddsfe_schedule_to_lottery import _to_beijing_time
+            start_at = found_ev.get("event_start_at") or ""
+            bj = _to_beijing_time(start_at)
+            if bj:
+                new_date = bj[:10]
+                new_time = bj[11:19]
+                conn.execute(
+                    "UPDATE lottery_matches SET oddsfe_event_id=?, league_name_cn=?, "
+                    "beijing_time=COALESCE(?, beijing_time), "
+                    "match_date=COALESCE(?, match_date), "
+                    "match_time=COALESCE(?, match_time), "
+                    "updated_at=CURRENT_TIMESTAMP WHERE lottery_match_id=?",
+                    (eid, league_to_set, bj, new_date, new_time, lm_id)
+                )
+            else:
+                conn.execute(
+                    "UPDATE lottery_matches SET oddsfe_event_id=?, league_name_cn=?, "
+                    "updated_at=CURRENT_TIMESTAMP WHERE lottery_match_id=?",
+                    (eid, league_to_set, lm_id)
+                )
             updated += 1
         else:
             not_found += 1

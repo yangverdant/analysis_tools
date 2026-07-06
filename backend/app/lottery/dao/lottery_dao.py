@@ -114,6 +114,52 @@ class LotteryMatchDAO:
         cursor = conn.cursor()
 
         try:
+            # Dedup across sources: sporttery-era rows (match_num from sporttery)
+            # and oddsfe-era rows (match_num = eid[-4:]) produce different
+            # lottery_match_id values for the same real-world match. Before
+            # inserting, look up by (home_team_cn, away_team_cn, match_date) —
+            # if a row already exists (likely from oddsfe with correct beijing_time
+            # and eid), preserve it and only refresh crawler fields. This prevents
+            # the recurring "duplicate matches with wrong kickoff times" problem
+            # where sporttery re-inserts rows that oddsfe already populated.
+            existing_row = cursor.execute(
+                """
+                SELECT lottery_match_id FROM lottery_matches
+                WHERE home_team_cn = ? AND away_team_cn = ? AND match_date = ?
+                LIMIT 1
+                """,
+                (match['home_team_cn'], match['away_team_cn'], match['match_date'])
+            ).fetchone()
+            if existing_row:
+                existing_id = existing_row['lottery_match_id'] if isinstance(existing_row, dict) else existing_row[0]
+                cursor.execute("""
+                    UPDATE lottery_matches SET
+                        home_team_id = COALESCE(?, home_team_id),
+                        away_team_id = COALESCE(?, away_team_id),
+                        league_name_cn = COALESCE(?, league_name_cn),
+                        match_num = ?,
+                        handicap_line = ?,
+                        play_types = ?,
+                        sell_status = ?,
+                        sell_end_time = COALESCE(?, sell_end_time),
+                        match_time = COALESCE(?, match_time),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE lottery_match_id = ?
+                """, (
+                    match.get('home_team_id'),
+                    match.get('away_team_id'),
+                    match.get('league_name_cn'),
+                    match.get('match_num'),
+                    match.get('handicap_line', 0),
+                    json.dumps(match.get('play_types', [])),
+                    match.get('sell_status', 'selling'),
+                    match.get('sell_end_time'),
+                    match.get('match_time'),
+                    existing_id
+                ))
+                conn.commit()
+                return True
+
             # Use INSERT OR IGNORE + UPDATE to preserve bridge fields (beijing_time, oddsfe_event_id)
             cursor.execute("""
                 INSERT OR IGNORE INTO lottery_matches
