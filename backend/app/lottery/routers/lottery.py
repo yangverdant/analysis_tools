@@ -23,6 +23,30 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/lottery", tags=["lottery"])
 
+# 体彩核心在售联赛白名单 — 仅这些联赛在体彩中心展示。
+# 其他联赛(oddsfe采集的美乙/智杯/厄甲/瑞甲/挪甲/芬甲/韩乙/中乙等)继续作为
+# 后端分析养料(进 predictions/results/learning), 但不展示在体彩中心。
+# 来源: sporttery历史返回 + 体彩官网公开在售清单(2026)。
+LOTTERY_CORE_LEAGUES = {
+    # 国际赛
+    "世界杯", "欧洲杯", "亚洲杯", "非洲杯", "美洲杯",
+    "国际赛",  # 友谊赛
+    # 五大联赛
+    "英超", "西甲", "德甲", "意甲", "法甲",
+    # 五大次级
+    "英冠", "西乙", "德乙", "意乙", "法乙",
+    # 欧洲主流
+    "荷甲", "比甲", "葡超", "苏超",
+    # 欧洲杯赛
+    "欧冠", "欧联", "欧协联",
+    # 美洲主流
+    "美职", "巴甲", "阿超",
+    # 亚洲主流
+    "日职", "韩职", "沙特联",
+    # 国内
+    "中超", "中甲",
+}
+
 # 数据库路径 - 云端优先使用环境变量，本地使用项目相对路径
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 DB_PATH = os.environ.get('DB_PATH', os.path.join(PROJECT_ROOT, 'data', 'football_v2.db'))
@@ -1323,6 +1347,7 @@ async def get_lottery_matches(
     date: Optional[str] = Query(None, description="日期 (YYYY-MM-DD)"),
     status: Optional[str] = Query(None, description="销售状态 (selling/stopped/closed)"),
     play_type: Optional[str] = Query(None, description="玩法筛选 (spf/bf/bqc/rqspf)"),
+    include_all: bool = Query(False, description="包含非体彩在售联赛(默认仅核心联赛)"),
     limit: int = Query(50, ge=1, le=200)
 ):
     """
@@ -1334,6 +1359,13 @@ async def get_lottery_matches(
     try:
         query = "SELECT * FROM lottery_matches WHERE 1=1"
         params = []
+
+        # 默认只展示体彩核心在售联赛, 其他联赛(oddsfe采集的非常规联赛)继续
+        # 在后端跑分析/赛果复盘/模型训练, 但不显示在体彩中心。
+        if not include_all:
+            placeholders = ",".join(["?" for _ in LOTTERY_CORE_LEAGUES])
+            query += f" AND league_name_cn IN ({placeholders})"
+            params.extend(sorted(LOTTERY_CORE_LEAGUES))
 
         if date:
             # Filter by Beijing-time date (single day). beijing_time is stored
