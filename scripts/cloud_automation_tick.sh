@@ -57,7 +57,8 @@ export PYTHONUNBUFFERED=1
       --max-intelligence "${FOOTBALL_AUTOMATION_MAX_INTELLIGENCE:-4}" \
       --max-validation-dates "${FOOTBALL_AUTOMATION_MAX_VALIDATION_DATES:-1}" \
       "${LEARNING_ARGS[@]}" \
-      --apply
+      --apply \
+    || true
   if [[ -d "$BACKUP_ROOT/model_reanalysis" ]]; then
     find "$BACKUP_ROOT/model_reanalysis" -type f -name '*.json' -mtime +"${FOOTBALL_AUTOMATION_BACKUP_RETENTION_DAYS:-3}" -delete || true
   fi
