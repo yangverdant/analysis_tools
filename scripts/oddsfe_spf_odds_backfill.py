@@ -145,11 +145,19 @@ def backfill_spf_odds(target_date: date) -> dict:
 
         # Also set handicap_line if it's still 0/NULL — derive from Asian handicap
         # if available, otherwise leave 0 (we don't have AH line here)
-        # Update play_types so frontend knows spf is available
-        cur.execute(
-            "UPDATE lottery_matches SET play_types = ? WHERE lottery_match_id = ?",
-            (json.dumps(["spf"]), lm_id)
-        )
+        # Reverse-sync play_types from lottery_odds so frontend knows what's
+        # available. This catches both newly-inserted spf rows AND pre-existing
+        # sporttery-sourced spf rows that never got play_types populated.
+        play_types_row = cur.execute(
+            "SELECT GROUP_CONCAT(play_type, ',') FROM (SELECT DISTINCT play_type FROM lottery_odds WHERE lottery_match_id = ? AND play_type IN ('spf','rqspf','bf','bqc','ttg') ORDER BY play_type)",
+            (lm_id,)
+        ).fetchone()
+        if play_types_row and play_types_row[0]:
+            pts = json.dumps(play_types_row[0].split(','))
+            cur.execute(
+                "UPDATE lottery_matches SET play_types = ? WHERE lottery_match_id = ? AND (play_types IS NULL OR play_types = '' OR play_types = '[]')",
+                (pts, lm_id)
+            )
 
     conn.commit()
     conn.close()
