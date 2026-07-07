@@ -35,6 +35,11 @@ export PYTHONUNBUFFERED=1
   "$ROOT/venv/bin/python" "$ROOT/scripts/oddsfe_schedule_to_lottery.py" 2>&1 | grep -E 'oddsfe_schedule_sync|total_inserted' | tail -5 || true
   # Backfill oddsfe_event_id for existing rows without one (so results supplement can run)
   "$ROOT/venv/bin/python" "$ROOT/scripts/oddsfe_eid_backfill.py" 2>&1 | grep -E 'backfill|updated|done' | tail -5 || true
+  # Repair team_id for newly synced matches — oddsfe only provides event_id,
+  # not team_id. Without this, infer_action_counts silently skips unanalyzed matches.
+  "$ROOT/venv/bin/python" "$ROOT/scripts/repair_lottery_team_canonical_ids.py" \
+    --db "$DB_PATH" --date-from "$(date -d '-1 day' '+%F')" --date-to "$(date -d '+4 days' '+%F')" \
+    --all-leagues --apply --no-backup 2>&1 | grep -E 'changes|scanned' | tail -3 || true
   # oddsfe results supplement — backfill FT/HT/BQC for matches finished in last 4 days
   "$ROOT/venv/bin/python" "$ROOT/scripts/oddsfe_results_supplement.py" 2>&1 | grep -E 'supplement|done' | tail -5 || true
   # Backfill lottery_odds.spf from oddsfe 1X2 prematch odds (Pinnacle) — covers WAF-ban gap
@@ -59,6 +64,17 @@ export PYTHONUNBUFFERED=1
       "${LEARNING_ARGS[@]}" \
       --apply \
     || true
+  # Health check: warn if >30% of today+tomorrow matches remain unanalyzed
+  TODAY="$(date -d 'now' '+%F')"
+  TOMORROW="$(date -d 'tomorrow' '+%F')"
+  TOTAL=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM lottery_matches WHERE substr(COALESCE(beijing_time, match_date),1,10) IN ('$TODAY','$TOMORROW')")
+  ANALYZED=$(sqlite3 "$DB_PATH" "SELECT COUNT(*) FROM lottery_matches lm WHERE substr(COALESCE(lm.beijing_time,lm.match_date),1,10) IN ('$TODAY','$TOMORROW') AND EXISTS(SELECT 1 FROM lottery_analysis_reports ar WHERE ar.lottery_match_id=lm.lottery_match_id AND ar.report_type IN ('prediction','full') AND COALESCE(ar.is_stale,0)=0)")
+  if [[ "$TOTAL" -gt 0 ]]; then
+    RATIO=$(( (TOTAL - ANALYZED) * 100 / TOTAL ))
+    if [[ "$RATIO" -gt 30 ]]; then
+      echo "WARNING: ${ANALYZED}/${TOTAL} matches analyzed (${RATIO}% gap) for ${TODAY}-${TOMORROW}"
+    fi
+  fi
   if [[ -d "$BACKUP_ROOT/model_reanalysis" ]]; then
     find "$BACKUP_ROOT/model_reanalysis" -type f -name '*.json' -mtime +"${FOOTBALL_AUTOMATION_BACKUP_RETENTION_DAYS:-3}" -delete || true
   fi
