@@ -1738,7 +1738,7 @@ const LotteryAnalysisDetail = defineComponent({
       const homeTeam = props.match?.home_team_cn || r.match_info?.home_team_cn || r.home_team_cn || '主队'
       const awayTeam = props.match?.away_team_cn || r.match_info?.away_team_cn || r.away_team_cn || '客队'
       const leagueName = props.match?.league_name_cn || r.match_info?.league_name_cn || r.league_name_cn || ''
-      const compLabel = COMP[mp.competition_type] || mp.competition_type || ''
+      const compLabel = mp.competition_type_cn || COMP[mp.competition_type] || mp.competition_type || ''
 
       // SPF probabilities: play_predictions format or analyses format
       const spfP = pp.spf?.probabilities || analyses.spf?.probabilities || probs
