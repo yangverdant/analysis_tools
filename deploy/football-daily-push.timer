@@ -1,0 +1,10 @@
+[Unit]
+Description=Run football daily push at 09:00 Beijing
+
+[Timer]
+OnCalendar=*-*-* 09:00 Asia/Shanghai
+Persistent=true
+Unit=football-daily-push.service
+
+[Install]
+WantedBy=timers.target

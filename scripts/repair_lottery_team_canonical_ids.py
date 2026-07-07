@@ -131,6 +131,17 @@ def label_score(row: sqlite3.Row, team_name: str, team_cols: set[str]) -> int:
             score = max(score, 5 if col in {"name_cn", "sporttery_name_cn"} else 4)
         elif len(target) >= 3 and (value.startswith(target) or target.startswith(value)):
             score = max(score, 3)
+    # English labels: normalize+compare so accented/variant spellings still hit.
+    target_en = norm_en(target)
+    if target_en:
+        for col in EN_LABEL_COLUMNS:
+            if col not in team_cols:
+                continue
+            value = text(row[col])
+            if not value:
+                continue
+            if norm_en(value) == target_en:
+                score = max(score, 4)
     return score
 
 
@@ -161,7 +172,7 @@ def candidate_rows(conn: sqlite3.Connection, team_name: str, current_id: Any, te
         params.append(current_id)
     name = text(team_name)
     if name:
-        bits = []
+        bits: List[str] = []
         for col in CN_LABEL_COLUMNS:
             if col not in team_cols:
                 continue
@@ -170,6 +181,13 @@ def candidate_rows(conn: sqlite3.Connection, team_name: str, current_id: Any, te
             bits.append(f"({col} IS NOT NULL AND length({col}) >= 2 AND ? LIKE {col} || '%')")
             params.append(name)
             bits.append(f"({col} IS NOT NULL AND length({col}) >= 2 AND {col} LIKE ? || '%')")
+            params.append(name)
+        # English-label exact match (handles oddsfe-supplied English names
+        # like "Ponte Preta" where the team has no name_cn).
+        for col in EN_LABEL_COLUMNS:
+            if col not in team_cols:
+                continue
+            bits.append(f"{col} = ?")
             params.append(name)
         if bits:
             where.append("(" + " OR ".join(bits) + ")")
@@ -255,7 +273,21 @@ def choose_canonical(
         and int(best["label_score"]) > current_score
         and int(best["sample_count"]) >= 8
     )
-    should_update = str(best["team_id"]) != str(current_id) and (sample_advantage or label_rescue)
+    # Unique-candidate rescue: when only one team matches the label exactly
+    # (score >= 4 means exact CN or exact normalized EN match) and current
+    # team_id is empty, accept it even with zero historical samples. This is
+    # how oddsfe-supplied matches get linked to canonical team_ids for teams
+    # we have registered but never seen play (e.g. newly added European
+    # minnows). Safe because there's no competing candidate.
+    unique_label_match = (
+        current_id in (None, "")
+        and len(candidates) == 1
+        and int(best["label_score"]) >= 4
+    )
+    should_update = (
+        str(best["team_id"]) != str(current_id)
+        and (sample_advantage or label_rescue or unique_label_match)
+    )
     return {
         **best,
         "current_sample_count": current_samples,

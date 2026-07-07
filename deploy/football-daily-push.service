@@ -1,0 +1,14 @@
+[Unit]
+Description=Football daily push (TOP3 + Agent report + channels)
+Wants=network-online.target
+After=network-online.target football-analyst.service football-automation-tick.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=/opt/football_tools
+Environment=FOOTBALL_TOOLS_ROOT=/opt/football_tools
+Environment=DB_PATH=/opt/football_tools/data/football_v2.db
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/football_tools/scripts/cloud_daily_push.sh
+Nice=5

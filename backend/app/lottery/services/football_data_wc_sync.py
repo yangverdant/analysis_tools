@@ -642,27 +642,31 @@ class FootballDataWorldCupSync:
             with self._connect() as conn:
                 lottery_rows = self._load_lottery_rows(conn, date_from, date_to)
                 summary["lottery_rows"] = len(lottery_rows)
+                # football_data_org often lags the live WC season — the API
+                # returns zero matches until the season is published. Treat
+                # empty/missing-window responses as a soft skip (success=True
+                # with source_health note) so the learning-refresh orchestrator
+                # does not abort the whole pipeline. oddsfe remains the
+                # primary source; football_data_org is supplementary.
                 if lottery_rows and not matches:
-                    error = (
-                        f"{SOURCE_NAME} returned zero WC matches for season {season} "
-                        f"while {len(lottery_rows)} local lottery rows exist"
-                    )
-                    summary["success"] = False
                     summary["source_health"] = "empty_api_response"
-                    summary["error"] = error
+                    summary["warning"] = (
+                        f"{SOURCE_NAME} returned zero WC matches for season {season} "
+                        f"while {len(lottery_rows)} local lottery rows exist "
+                        "(API likely lags live season; oddsfe remains primary)"
+                    )
                     if apply:
-                        self.foundation.finish_run(run_id, status="failed", summary=summary, error=error)
+                        self.foundation.finish_run(run_id, status="success", summary=summary)
                     return summary
                 if lottery_rows and not window_matches:
-                    error = (
-                        f"{SOURCE_NAME} returned no WC matches in {date_from}..{date_to} "
-                        f"while {len(lottery_rows)} local lottery rows exist"
-                    )
-                    summary["success"] = False
                     summary["source_health"] = "empty_window_response"
-                    summary["error"] = error
+                    summary["warning"] = (
+                        f"{SOURCE_NAME} returned no WC matches in {date_from}..{date_to} "
+                        f"while {len(lottery_rows)} local lottery rows exist "
+                        "(API likely lags live season; oddsfe remains primary)"
+                    )
                     if apply:
-                        self.foundation.finish_run(run_id, status="failed", summary=summary, error=error)
+                        self.foundation.finish_run(run_id, status="success", summary=summary)
                     return summary
                 if apply:
                     summary["competition_artifacts_recorded"] += self._record_artifact(

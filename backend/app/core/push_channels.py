@@ -160,7 +160,8 @@ def format_daily_push(date: str, mode: str, predictions: list,
             alts = bet.get('alternative_bets') or []
             if alts:
                 alt_strs = [f"{a.get('play_type')}:{a.get('selection')}(edge+{a.get('edge',0):.0%})" for a in alts]
-                lines.append(f'   备选: {\" | \".join(alt_strs)}')
+                sep = ' | '
+                lines.append(f'   备选: {sep.join(alt_strs)}')
             lines.append(f'   {reason}')
             lines.append('')
     else:

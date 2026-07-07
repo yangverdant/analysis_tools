@@ -296,7 +296,11 @@ class AutomationCenter:
         values: List[str] = []
         if mode in {"rolling", "mixed"}:
             today = _today()
-            values.extend((today + timedelta(days=offset)).isoformat() for offset in (-1, 0, 1, 2))
+            # Cover today-1 (yesterday's results to validate) through today+3
+            # so matches 4 days out get collected + analyzed. Was (-1, 0, 1, 2)
+            # which silently dropped the 4th day — users saw "today+3 not
+            # analyzed" even though oddsfe had synced them.
+            values.extend((today + timedelta(days=offset)).isoformat() for offset in (-1, 0, 1, 2, 3))
         if mode == "range":
             if not date_from or not date_to:
                 raise ValueError("date_from/date_to are required for range mode")
