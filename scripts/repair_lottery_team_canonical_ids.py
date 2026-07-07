@@ -151,6 +151,91 @@ def is_senior_label(value: Any) -> bool:
     return not any(item in label for item in bad)
 
 
+# League name → expected country for team disambiguation. When multiple
+# teams share the same name_cn (e.g. "兰格斯" for both Rangers Scotland
+# and Rangers Chile), the league context tells us which country's team
+# is correct. Keyed by substring match.
+LEAGUE_COUNTRY_HINTS: dict[str, str] = {
+    "智利": "Chile",
+    "巴甲": "Brazil",
+    "巴乙": "Brazil",
+    "巴西": "Brazil",
+    "阿甲": "Argentina",
+    "阿乙": "Argentina",
+    "阿根廷": "Argentina",
+    "英超": "England",
+    "英冠": "England",
+    "英甲": "England",
+    "英乙": "England",
+    "苏超": "Scotland",
+    "苏冠": "Scotland",
+    "苏甲": "Scotland",
+    "西甲": "Spain",
+    "西乙": "Spain",
+    "德甲": "Germany",
+    "德乙": "Germany",
+    "意甲": "Italy",
+    "意乙": "Italy",
+    "法甲": "France",
+    "法乙": "France",
+    "葡超": "Portugal",
+    "葡甲": "Portugal",
+    "荷甲": "Netherlands",
+    "荷乙": "Netherlands",
+    "比甲": "Belgium",
+    "比乙": "Belgium",
+    "墨超": "Mexico",
+    "墨甲": "Mexico",
+    "日职": "Japan",
+    "日乙": "Japan",
+    "韩职": "South Korea",
+    "K联赛": "South Korea",
+    "美职": "United States",
+    "MLS": "United States",
+    "中超": "China",
+    "中甲": "China",
+    "澳超": "Australia",
+    "俄超": "Russia",
+    "土超": "Turkey",
+    "瑞典超": "Sweden",
+    "瑞典甲": "Sweden",
+    "挪超": "Norway",
+    "挪甲": "Norway",
+    "丹超": "Denmark",
+    "芬超": "Finland",
+    "冰岛超": "Iceland",
+    "爱超": "Ireland",
+    "瑞士超": "Switzerland",
+    "奥甲": "Austria",
+    "捷甲": "Czech Republic",
+    "波兰超": "Poland",
+    "匈甲": "Hungary",
+    "罗甲": "Romania",
+    "乌超": "Ukraine",
+    "希腊超": "Greece",
+    "以超": "Israel",
+    "世界杯": "",  # national teams, no club country hint
+    "国际赛": "",  # national teams
+    "欧国联": "",
+    "亚洲杯": "",
+    "非洲杯": "",
+    "美洲杯": "",
+    "欧冠": "",  # multi-country
+    "欧联": "",
+    "欧协联": "",
+}
+
+
+def league_country_hint(league_name: str) -> str:
+    """Extract expected country from league name for team disambiguation."""
+    if not league_name:
+        return ""
+    for key, country in LEAGUE_COUNTRY_HINTS.items():
+        if key in league_name:
+            return country
+    return ""
+
+
 def current_english_variants(conn: sqlite3.Connection, current_id: Any, team_cols: set[str]) -> set[str]:
     if current_id in (None, ""):
         return set()
@@ -220,11 +305,13 @@ def choose_canonical(
     current_id: Any,
     match_date: str,
     team_cols: set[str],
+    league_name: str = "",
 ) -> Optional[Dict[str, Any]]:
     rows = candidate_rows(conn, team_name, current_id, team_cols)
     if not rows:
         return None
     english_anchor = current_english_variants(conn, current_id, team_cols)
+    expected_country = league_country_hint(league_name)
 
     candidates = []
     for row in rows:
@@ -246,6 +333,17 @@ def choose_canonical(
         national_bonus = 1 if team_type == "national" else 0
         samples = sample_count(conn, row["team_id"], match_date)
         sporttery_bonus = 1 if "sporttery_name_cn" in team_cols and text(row["sporttery_name_cn"]) == text(team_name) else 0
+        # Country bonus: when league context implies a specific country, boost
+        # candidates from that country and penalize candidates with a different
+        # explicit country. "International"/empty country is neutral — many teams
+        # have incorrect or missing country data, so only penalize clear mismatches.
+        team_country = text(row["country"]) if "country" in team_cols else ""
+        if expected_country and team_country == expected_country:
+            country_bonus = 2
+        elif expected_country and team_country and team_country not in ("International", "") and team_country != expected_country:
+            country_bonus = -2  # Penalize clear country mismatch
+        else:
+            country_bonus = 0
         candidates.append(
             {
                 "team_id": row["team_id"],
@@ -253,9 +351,10 @@ def choose_canonical(
                 "label_score": score,
                 "team_type": team_type,
                 "sporttery_bonus": sporttery_bonus,
+                "country_bonus": country_bonus,
                 "current": current,
                 "row": display_row(row, team_cols),
-                "sort_key": (score, samples, national_bonus, sporttery_bonus, 1 if current else 0),
+                "sort_key": (score, country_bonus, samples, national_bonus, sporttery_bonus, 1 if current else 0),
             }
         )
 
@@ -267,26 +366,64 @@ def choose_canonical(
     current_samples = int(current["sample_count"]) if current else 0
     current_score = int(current["label_score"]) if current else 0
 
-    sample_advantage = int(best["sample_count"]) >= max(8, current_samples + 5)
+    # sample_advantage only applies when current team_id doesn't have an exact
+    # label match. If current_id was set by unambiguous_label_match (exact label
+    # match with no competing exact match), a higher-sample candidate with the
+    # same label score shouldn't override it — those samples may come from
+    # historical mis-assignments (e.g. Avaí #1248 has 106 matches but is the
+    # wrong team because it was consistently mis-linked in the past).
+    current_exact_match = current is not None and current_score >= 4
+    sample_advantage = (
+        not current_exact_match
+        and int(best["sample_count"]) >= max(8, current_samples + 5)
+    )
     label_rescue = (
         current_samples == 0
         and int(best["label_score"]) > current_score
         and int(best["sample_count"]) >= 8
     )
-    # Unique-candidate rescue: when only one team matches the label exactly
-    # (score >= 4 means exact CN or exact normalized EN match) and current
-    # team_id is empty, accept it even with zero historical samples. This is
-    # how oddsfe-supplied matches get linked to canonical team_ids for teams
-    # we have registered but never seen play (e.g. newly added European
-    # minnows). Safe because there's no competing candidate.
-    unique_label_match = (
+    # Mismatch override: when current team_id has zero label match (name is
+    # completely different) but a candidate has an exact match, the current
+    # assignment is almost certainly wrong regardless of sample count. E.g.
+    # team 746 "流浪者" (Rangers, Scotland) was assigned to "兰格斯" (Rangers,
+    # Chile) — different characters, zero label overlap. The 745 samples under
+    # 746 are from historical mis-assignments, not evidence of correctness.
+    mismatch_override = (
+        current is not None
+        and current_score == 0
+        and int(best["label_score"]) >= 4
+    )
+    # Context mismatch override: when both best and current have exact label
+    # matches (same name, different teams), but the current team's country
+    # explicitly conflicts with the league's expected country while the best
+    # team's country doesn't, override. E.g. "兰格斯" in 智利杯: current=746
+    # (Scotland) vs best=136740 (International/neutral) — Scotland is clearly
+    # wrong for a Chilean cup match.
+    current_country = text(current["row"]["country"]) if current and "country" in current.get("row", {}) else ""
+    best_country = text(best["row"]["country"]) if "country" in best.get("row", {}) else ""
+    context_mismatch = (
+        expected_country
+        and current is not None
+        and current_exact_match
+        and int(best["label_score"]) >= 4
+        and current_country not in ("", "International")
+        and current_country != expected_country
+        and (best_country == expected_country or best_country in ("", "International"))
+    )
+    # Unambiguous-label rescue: when current team_id is empty and the best
+    # candidate has an exact label match (score >= 4) with no other candidate
+    # also at score >= 4, accept it even with zero historical samples. Weak
+    # prefix matches (score <= 3) don't count as ambiguity — "智利" (score=3)
+    # shouldn't block "智利大学" (score=5) from being selected.
+    exact_match_count = sum(1 for c in candidates if int(c["label_score"]) >= 4)
+    unambiguous_label_match = (
         current_id in (None, "")
-        and len(candidates) == 1
+        and exact_match_count == 1
         and int(best["label_score"]) >= 4
     )
     should_update = (
         str(best["team_id"]) != str(current_id)
-        and (sample_advantage or label_rescue or unique_label_match)
+        and (sample_advantage or label_rescue or unambiguous_label_match or mismatch_override or context_mismatch)
     )
     return {
         **best,
@@ -396,7 +533,7 @@ def fetch_matches(conn: sqlite3.Connection, args: argparse.Namespace) -> List[sq
     return conn.execute(
         f"""
         SELECT lottery_match_id, match_num, match_date, home_team_cn, away_team_cn,
-               home_team_id, away_team_id
+               home_team_id, away_team_id, league_name_cn
         FROM lottery_matches
         WHERE {' AND '.join(where)}
         ORDER BY date(match_date), beijing_time, lottery_match_id
@@ -412,7 +549,7 @@ def plan_repairs(conn: sqlite3.Connection, rows: Sequence[sqlite3.Row]) -> List[
         for side in ("home", "away"):
             name = row[f"{side}_team_cn"]
             old_id = row[f"{side}_team_id"]
-            chosen = choose_canonical(conn, name, old_id, row["match_date"], team_cols)
+            chosen = choose_canonical(conn, name, old_id, row["match_date"], team_cols, row["league_name_cn"])
             if not chosen or not chosen["should_update"]:
                 continue
             changes.append(
