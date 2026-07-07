@@ -100,10 +100,19 @@ class MatchProfile:
 
     def to_dict(self) -> Dict[str, Any]:
         """序列化为字典(供日志/调试)"""
+        # CN translations kept in lockstep with the English enum values so the
+        # user-facing report doesn't mix Chinese sentences with raw English
+        # like "friendly_intl" / "national" / "league_phase".
+        from ..cn_labels import (
+            competition_type_cn, participant_type_cn, match_phase_cn,
+        )
         return {
             "competition_type": self.competition_type.value,
+            "competition_type_cn": competition_type_cn(self.competition_type.value),
             "participant_type": self.participant_type.value,
+            "participant_type_cn": participant_type_cn(self.participant_type.value),
             "match_phase": self.match_phase.value,
+            "match_phase_cn": match_phase_cn(self.match_phase.value),
             "line": self.line,
             "has_two_legs": self.has_two_legs,
             "is_neutral_venue": self.is_neutral_venue,

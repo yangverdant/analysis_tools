@@ -12,6 +12,10 @@ import sqlite3
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 
+from ..core.cn_labels import (
+    motivation_type_cn, motivation_level_cn, advantage_cn, level_cn,
+)
+
 
 class MotivationAnalyzer:
     """动机分析器"""
@@ -395,10 +399,20 @@ class MotivationAnalyzer:
             'comparison': {
                 'urgency_difference': urgency_diff,
                 'advantage': advantage,
+                'advantage_cn': advantage_cn(advantage),
                 'level': level,
+                'level_cn': level_cn(level),
                 'description': description
             }
         }
+        # Add CN translations for the simplified motivation fields too, so
+        # the frontend can read *_cn without caring which path generated it.
+        if isinstance(home_motivation, dict):
+            home_motivation['motivation_type_cn'] = motivation_type_cn(home_motivation.get('motivation_type'))
+            home_motivation['motivation_level_cn'] = motivation_level_cn(home_motivation.get('motivation_level'))
+        if isinstance(away_motivation, dict):
+            away_motivation['motivation_type_cn'] = motivation_type_cn(away_motivation.get('motivation_type'))
+            away_motivation['motivation_level_cn'] = motivation_level_cn(away_motivation.get('motivation_level'))
 
         if own_conn:
             conn.close()
@@ -589,14 +603,18 @@ class MotivationAnalyzer:
             'away_team_id': away_team_id,
             'home_motivation': {
                 'type': home_motivation.get('motivation_type'),
+                'type_cn': motivation_type_cn(home_motivation.get('motivation_type')),
                 'level': home_motivation.get('motivation_level'),
+                'level_cn': motivation_level_cn(home_motivation.get('motivation_level')),
                 'urgency': home_urgency,
                 'position': home_motivation.get('position'),
                 'description': home_motivation.get('description')
             },
             'away_motivation': {
                 'type': away_motivation.get('motivation_type'),
+                'type_cn': motivation_type_cn(away_motivation.get('motivation_type')),
                 'level': away_motivation.get('motivation_level'),
+                'level_cn': motivation_level_cn(away_motivation.get('motivation_level')),
                 'urgency': away_urgency,
                 'position': away_motivation.get('position'),
                 'description': away_motivation.get('description')
@@ -604,7 +622,9 @@ class MotivationAnalyzer:
             'comparison': {
                 'urgency_difference': urgency_diff,
                 'advantage': advantage,
+                'advantage_cn': advantage_cn(advantage),
                 'level': level,
+                'level_cn': level_cn(level),
                 'description': description
             }
         }

@@ -13,6 +13,10 @@ from .elo import EloAnalyzer
 from .xg import XGAnalyzer
 from .poisson import PoissonPredictor
 from .h2h import H2HAnalyzer
+from ..core.cn_labels import (
+    predicted_result_cn, confidence_level_cn, advantage_cn, level_cn,
+    motivation_type_cn,
+)
 from .form import FormAnalyzer
 from .home_away import HomeAwayAnalyzer
 from .motivation import MotivationAnalyzer
@@ -969,7 +973,7 @@ class ComprehensiveAnalyzer:
         report_lines.append(f"  主胜概率：{probs['home_win'] * 100:.1f}%")
         report_lines.append(f"  平局概率：{probs['draw'] * 100:.1f}%")
         report_lines.append(f"  客胜概率：{probs['away_win'] * 100:.1f}%")
-        report_lines.append(f"  预测结果：{final_prediction['predicted_result']}（置信度：{final_prediction['confidence_level']}）")
+        report_lines.append(f"  预测结果：{predicted_result_cn(final_prediction['predicted_result'])}（置信度：{confidence_level_cn(final_prediction['confidence_level'])}）")
 
         # 预期比分
         expected = final_prediction['expected_score']
@@ -1011,14 +1015,14 @@ class ComprehensiveAnalyzer:
         else:
             level = form_last10.get('comparison', {}).get('level', 'neutral')
             advantage = form_last10.get('comparison', {}).get('advantage', 'balanced')
-            report_lines.append(f"  状态对比：{advantage}方状态更优（差距等级：{level}）")
+            report_lines.append(f"  状态对比：{advantage_cn(advantage)}方状态更优（差距等级：{level_cn(level)}）")
 
         # 主客场优势（使用last10作为报告默认值）
         ha_last10 = home_away_analysis.get('last10', {})
         home_team_ha = ha_last10.get('home_team', {})
         home_adv = home_team_ha.get('home_advantage', {'level': 'unknown', 'score': 50})
         report_lines.append(f"\n主场优势：")
-        report_lines.append(f"  主队主场优势：{home_adv['level']}（评分：{home_adv['score']}）")
+        report_lines.append(f"  主队主场优势：{level_cn(home_adv['level'])}（评分：{home_adv['score']}）")
 
         # 动机分析
         if motivation_comparison:
@@ -1030,8 +1034,8 @@ class ComprehensiveAnalyzer:
             am_type = am.get('motivation_type', am.get('type', '?'))
             hm_urgency = hm.get('urgency', '?')
             am_urgency = am.get('urgency', '?')
-            report_lines.append(f"  主队动机：{hm_type}（紧迫度：{hm_urgency}）")
-            report_lines.append(f"  客队动机：{am_type}（紧迫度：{am_urgency}）")
+            report_lines.append(f"  主队动机：{motivation_type_cn(hm_type)}（紧迫度：{hm_urgency}）")
+            report_lines.append(f"  客队动机：{motivation_type_cn(am_type)}（紧迫度：{am_urgency}）")
             report_lines.append(f"  动机对比：{motivation_comparison['comparison']['description']}")
 
         # 利好利空

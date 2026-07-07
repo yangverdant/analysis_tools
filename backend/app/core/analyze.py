@@ -15,6 +15,11 @@ from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from .time_utils import today_beijing, tomorrow_beijing
+from .cn_labels import (
+    predicted_result_cn, confidence_level_cn, advantage_cn, level_cn,
+    motivation_type_cn, motivation_level_cn, competition_type_cn,
+    participant_type_cn, match_phase_cn, gate_reason_cn, scenario_type_cn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -3649,14 +3654,18 @@ def _apply_selective_recommendation_guard(db_path: str, match: dict, result: dic
         play['historical_quality'] = quality
         play['recommendation_gate'] = {
             'tier': tier,
+            'tier_cn': confidence_level_cn(_tier_to_confidence_level(tier)),
             'base_tier': base_tier,
+            'base_tier_cn': confidence_level_cn(_tier_to_confidence_level(base_tier)),
             'reason': reason,
+            'reason_cn': gate_reason_cn(reason),
             'prediction_key': prediction_key,
             'selected_probability': round(probability, 4) if probability is not None else None,
             'historical_accuracy': quality.get('accuracy'),
             'historical_sample_size': quality.get('sample_size'),
             'historical_scope': quality.get('scope'),
             'scenario_type': scenario_type,
+            'scenario_type_cn': scenario_type_cn(scenario_type),
         }
         summary['plays'][play_type] = play['recommendation_gate']
 
@@ -3666,14 +3675,18 @@ def _apply_selective_recommendation_guard(db_path: str, match: dict, result: dic
     bf_tier, bf_reason = _tier_after_historical_quality('bf', _base_tier_from_probability('bf', bf_prob), bf_prob, bf_quality)
     summary['plays']['bf'] = {
         'tier': bf_tier,
+        'tier_cn': confidence_level_cn(_tier_to_confidence_level(bf_tier)),
         'base_tier': _base_tier_from_probability('bf', bf_prob),
+        'base_tier_cn': confidence_level_cn(_tier_to_confidence_level(_base_tier_from_probability('bf', bf_prob))),
         'reason': bf_reason,
+        'reason_cn': gate_reason_cn(bf_reason),
         'prediction_key': bf_key,
         'selected_probability': round(bf_prob, 4) if bf_prob is not None else None,
         'historical_accuracy': bf_quality.get('accuracy'),
         'historical_sample_size': bf_quality.get('sample_size'),
         'historical_scope': bf_quality.get('scope'),
         'scenario_type': scenario_type,
+        'scenario_type_cn': scenario_type_cn(scenario_type),
     }
     top_scores = plays.get('top3_scores')
     if isinstance(top_scores, list):
