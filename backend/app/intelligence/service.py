@@ -376,6 +376,31 @@ class IntelligenceService:
                 jobs.append(job)
         return {"created": created, "updated": updated, "skipped": 0, "jobs": jobs}
 
+    def generate_jobs_for_date_range(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Generate intelligence_jobs for all dates in range.
+
+        Ensures rows exist in intelligence_jobs for the target date range so
+        that fill_gaps can find candidates. Without this, the automation
+        pipeline detects "collect_intelligence" gaps but fill_gaps returns
+        zero candidates because no jobs exist to fill.
+        """
+        from datetime import date, timedelta
+        start = date.fromisoformat(start_date) if start_date else date.today()
+        end = date.fromisoformat(end_date) if end_date else date.today() + timedelta(days=2)
+        total_created = 0
+        total_updated = 0
+        d = start
+        while d <= end:
+            result = self.generate_jobs_for_date(match_date=d.isoformat())
+            total_created += result.get("created", 0)
+            total_updated += result.get("updated", 0)
+            d += timedelta(days=1)
+        return {"created": total_created, "updated": total_updated, "dates": (end - start).days + 1}
+
     def run_daily(
         self,
         match_date: Optional[str] = None,
@@ -1014,6 +1039,14 @@ class IntelligenceService:
             )
             conn.commit()
         try:
+            # Ensure intelligence_jobs exist for the target date range before
+            # trying to fill gaps. Without this, fill_gaps finds zero candidates
+            # because it only queries existing jobs — and nothing in the automation
+            # pipeline creates those rows (generate_jobs_for_date was only reachable
+            # via HTTP API).
+            generated = self.generate_jobs_for_date_range(
+                start_date=start_date, end_date=end_date,
+            )
             summary = self.fill_gaps(
                 start_date=start_date,
                 end_date=end_date,
