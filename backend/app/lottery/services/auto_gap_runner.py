@@ -1315,17 +1315,23 @@ class LotteryAutoGapRunner:
         return summary
 
     def _validate_dates(self, date_from: str, date_to: str, max_dates: int) -> Dict[str, Any]:
-        from backend.app.core.validate import _validate_predictions
+        from backend.app.core.validate import validate
 
-        dates = date_list(date_from, date_to)[:max_dates]
-        result = _validate_predictions(self.db_path, dates)
-        result["queued_revalidation"] = self._mark_revalidation_processed(dates)
-        if dates:
-            result["reanalysis_change_settlement"] = self.settle_reanalysis_changes(
-                min(dates),
-                max(dates),
-                limit=200,
-            )
+        result = validate(state=None, db_path=self.db_path, agent=None)
+
+        # Mark revalidation processed
+        try:
+            dates = date_list(date_from, date_to)[:max_dates]
+            result["queued_revalidation"] = self._mark_revalidation_processed(dates)
+            if dates:
+                result["reanalysis_change_settlement"] = self.settle_reanalysis_changes(
+                    min(dates),
+                    max(dates),
+                    limit=200,
+                )
+        except Exception as e:
+            result["revalidation_error"] = str(e)
+
         return result
 
     def _mark_revalidation_processed(self, dates: List[str]) -> Dict[str, Any]:
