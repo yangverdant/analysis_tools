@@ -9582,6 +9582,8 @@ def _load_scene_ht_transition(db_path: str, scene: str) -> Optional[dict]:
 
     Returns: {'h': {'h': p, 'd': p, 'a': p}, 'd': {...}, 'a': {...}} 或 None
     """
+    if not db_path or scene:
+        pass  # fall through to default
     if not db_path or not scene:
         return None
     try:
@@ -9596,8 +9598,17 @@ def _load_scene_ht_transition(db_path: str, scene: str) -> Optional[dict]:
             if row and row[0]:
                 data = json.loads(row[0])
                 # 必须三个key都有
-                if all(k in data for k in ('h', 'd', 'a')):
-                    return {k: data[k] for k in ('h', 'd', 'a')}
+                if not all(k in data for k in ('h', 'd', 'a')):
+                    return None
+                # 样本量检查: <30不使用(小样本偏差严重)
+                sample_count = data.get('_sample_count', 0)
+                if sample_count < 30:
+                    return None
+                # 合理性检查: HT=home→FT=home应>40%(默认77.6%), 否则小样本偏差
+                transition = {k: data[k] for k in ('h', 'd', 'a')}
+                if transition['h']['h'] < 0.40 or transition['a']['a'] < 0.40:
+                    return None
+                return transition
         finally:
             conn.close()
     except Exception:
@@ -9815,21 +9826,21 @@ def _compute_bqc(
         opposite_half = half_axis_probs.get(opposite, 0.0)
         preferred_half = axis_target
         if axis_target == 'h':
-            if low_tempo_half and draw_half >= same_half * 0.82:
+            if low_tempo_half and draw_half >= same_half * 0.95:
                 preferred_half = 'd'
-            elif draw_half >= same_half + 0.035:
+            elif draw_half >= same_half + 0.08:
                 preferred_half = 'd'
-            elif opposite_half >= same_half + 0.10 and opposite_half >= draw_half + 0.04:
+            elif opposite_half >= same_half + 0.15 and opposite_half >= draw_half + 0.06:
                 preferred_half = opposite
         elif axis_target == 'a':
-            if draw_half >= same_half + 0.035:
+            if draw_half >= same_half + 0.08:
                 preferred_half = 'd'
-            elif opposite_half >= same_half + 0.10 and opposite_half >= draw_half + 0.04:
+            elif opposite_half >= same_half + 0.15 and opposite_half >= draw_half + 0.06:
                 preferred_half = opposite
         elif axis_target == 'd':
-            if half_home >= draw_half + 0.08:
+            if half_home >= draw_half + 0.12:
                 preferred_half = 'h'
-            elif half_away >= draw_half + 0.08:
+            elif half_away >= draw_half + 0.12:
                 preferred_half = 'a'
         phase_candidate = f'{preferred_half}{axis_target}'
         if phase_candidate in constrained_probs and phase_candidate != rec:
@@ -9837,7 +9848,7 @@ def _compute_bqc(
             min_candidate_ratio = (
                 _env_float('FOOTBALL_BQC_PHASE_MIN_RATIO_AWAY', 1.0, 0.0, 1.5)
                 if axis_target == 'a'
-                else _env_float('FOOTBALL_BQC_PHASE_MIN_RATIO_HOME_DRAW', 0.55, 0.0, 1.5)
+                else _env_float('FOOTBALL_BQC_PHASE_MIN_RATIO_HOME_DRAW', 0.85, 0.0, 1.5)
             )
             if max_constrained <= 0 or constrained_probs[phase_candidate] >= max_constrained * min_candidate_ratio:
                 phase_axis_adjustment = {

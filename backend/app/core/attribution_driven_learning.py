@@ -189,12 +189,13 @@ def _determine_action(play_type: str, dominant_pattern: str,
         # 实际计算场景的empirical transition, 写入model_params_history
         transition = _compute_scene_transition(group, pattern_data)
         # sample太少时不要transition, 标记flag即可
+        # 最少30条: 18条样本产出了严重偏差的transition(h->h=0.2), 需要足够样本保证稳定
         actual_samples = transition.get('_sample_count', 0)
-        if actual_samples < 8:
+        if actual_samples < 30:
             return 'flag_ht_transition_issue', {
                 'play_type': 'bqc',
                 'sample_count': count,
-                'reason': f'bqc HT方向错误{count}条(有效HT/FT数据{actual_samples}条<8), sample不足, 暂flag不重算',
+                'reason': f'bqc HT方向错误{count}条(有效HT/FT数据{actual_samples}条<30), sample不足, 暂flag不重算',
             }
         return 'recompute_ht_transition', {
             'play_type': 'bqc',

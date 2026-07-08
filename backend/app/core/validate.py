@@ -403,6 +403,8 @@ def validate(state, db_path: str, agent=None) -> dict:
     return {
         'route': 'normal',
         'validated': results['validation'].get('validated', 0),
+        'attributed': results['attribution'].get('attributed', 0),
+        'settled': results['settlement'].get('settled', 0),
         'reanalysis_change_settlement': results.get('reanalysis_change_settlement'),
     }
 

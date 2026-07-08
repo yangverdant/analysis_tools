@@ -309,18 +309,26 @@ def _attach_post_prediction_consistency(args: argparse.Namespace, payload: Dict[
 
 
 def run_validation(args: argparse.Namespace) -> Dict[str, Any]:
-    from backend.app.core.validate import _validate_predictions
-    from backend.app.lottery.services.auto_gap_runner import LotteryAutoGapRunner, date_list
+    from backend.app.core.validate import validate
+    from backend.app.core.agent.client import AnalystAgent
 
-    dates = date_list(args.date_from, args.date_to)[: args.max_validation_dates]
-    runner = LotteryAutoGapRunner(args.db, args.oddsfe_db)
-    result = _validate_predictions(args.db, dates)
-    result["queued_revalidation"] = runner._mark_revalidation_processed(dates)
-    result["reanalysis_change_settlement"] = runner.settle_reanalysis_changes(
-        min(dates) if dates else args.date_from,
-        max(dates) if dates else args.date_to,
-        league=args.league or None,
-    )
+    agent = None
+    try:
+        agent = AnalystAgent(args.db)
+    except Exception:
+        pass
+
+    result = validate(state=None, db_path=args.db, agent=agent)
+
+    # Mark revalidation processed
+    try:
+        from backend.app.lottery.services.auto_gap_runner import LotteryAutoGapRunner, date_list
+        dates = date_list(args.date_from, args.date_to)[: args.max_validation_dates]
+        runner = LotteryAutoGapRunner(args.db, args.oddsfe_db)
+        result["queued_revalidation"] = runner._mark_revalidation_processed(dates)
+    except Exception as e:
+        result["revalidation_mark_error"] = str(e)
+
     return result
 
 
