@@ -204,7 +204,7 @@ export default {
   },
   setup() {
     const router = useRouter()
-    const currentPage = ref('体彩中心')
+    const currentPage = ref('驾驶舱')
     const searchQuery = ref('')
     const sidebarOpen = ref(false)
     const syncStatus = ref(null)
