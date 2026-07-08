@@ -812,8 +812,8 @@
                   <template v-if="match.score_detail.penalties"> 点球{{ match.score_detail.penalties }}</template>
                 </span>
                 <span v-else-if="match.home_goals_ht != null && match.away_goals_ht != null" class="mc-ht-score">
-                  {{ match.home_goals_ht }}-{{ match.away_goals_ht }}
-                  {{ (match.home_goals_ft - match.home_goals_ht) }}-{{ (match.away_goals_ft - match.away_goals_ht) }}
+                  半{{ match.home_goals_ht }}-{{ match.away_goals_ht }}
+                  下{{ (match.home_goals_ft - match.home_goals_ht) }}-{{ (match.away_goals_ft - match.away_goals_ht) }}
                 </span>
                 <span v-else-if="match.match_end_type === 'AET'" class="mc-ft-tag">AET</span>
                 <span v-else-if="match.match_end_type === 'AP'" class="mc-ft-tag">AP</span>

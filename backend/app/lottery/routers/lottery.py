@@ -1390,7 +1390,27 @@ async def get_lottery_matches(
         params.append(limit)
 
         cursor.execute(query, params)
-        matches = [dict(row) for row in cursor.fetchall()]
+        raw_matches = [dict(row) for row in cursor.fetchall()]
+
+        # Dedup: same (home, away, date) from different sources → keep latest
+        seen_keys = {}
+        matches = []
+        for match in raw_matches:
+            home = (match.get('home_team_cn') or '').strip()
+            away = (match.get('away_team_cn') or '').strip()
+            mdate = match.get('match_date') or ''
+            key = (home, away, mdate)
+            if key in seen_keys:
+                # Keep the one with oddsfe_event_id (preferred) or later created_at
+                prev_idx = seen_keys[key]
+                prev = matches[prev_idx]
+                prev_has_eid = bool(prev.get('oddsfe_event_id'))
+                cur_has_eid = bool(match.get('oddsfe_event_id'))
+                if cur_has_eid and not prev_has_eid:
+                    matches[prev_idx] = match
+                continue
+            seen_keys[key] = len(matches)
+            matches.append(match)
 
         # 补全beijing_time: 体彩match_date+match_time就是北京时间
         # 如果beijing_time为空或与match_date+match_time不一致，用match_date+match_time
