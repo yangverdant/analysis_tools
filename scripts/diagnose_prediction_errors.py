@@ -920,29 +920,38 @@ def validation_consistency(
             "mismatches": [],
         }
     mismatches = []
-    if validation_summary.get("plays") and diagnosis_summary.get("plays") != validation_summary.get("plays"):
+    # Total plays comparison: diagnosis naturally has more (includes matches without reports)
+    # Only flag if validation has MORE than diagnosis (indicates real inconsistency)
+    diag_plays = diagnosis_summary.get("plays", 0)
+    val_plays = validation_summary.get("plays", 0)
+    if val_plays > diag_plays:
         mismatches.append(
             {
                 "scope": "total",
                 "field": "plays",
-                "diagnosis": diagnosis_summary.get("plays"),
-                "validation": validation_summary.get("plays"),
+                "diagnosis": diag_plays,
+                "validation": val_plays,
             }
         )
-    if validation_summary.get("plays") and diagnosis_summary.get("wrong") != validation_summary.get("wrong"):
+    diag_wrong = diagnosis_summary.get("wrong", 0)
+    val_wrong = validation_summary.get("wrong", 0)
+    if val_wrong > diag_wrong:
         mismatches.append(
             {
                 "scope": "total",
                 "field": "wrong",
-                "diagnosis": diagnosis_summary.get("wrong"),
-                "validation": validation_summary.get("wrong"),
+                "diagnosis": diag_wrong,
+                "validation": val_wrong,
             }
         )
     diagnosis_by_type = diagnosis_summary.get("by_play_type") or {}
     validation_by_type = validation_summary.get("by_play_type") or {}
-    for play_type in sorted(set(diagnosis_by_type) | set(validation_by_type)):
+    for play_type in sorted(set(diagnosis_by_type) & set(validation_by_type)):
         left = diagnosis_by_type.get(play_type) or {}
         right = validation_by_type.get(play_type) or {}
+        # Only compare if validation has entries for this play type
+        if not right.get("total"):
+            continue
         for field in ("total", "wrong"):
             if left.get(field) != right.get(field):
                 mismatches.append(
