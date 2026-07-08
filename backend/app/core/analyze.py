@@ -167,6 +167,14 @@ def _compact_play_predictions(plays: Any) -> dict:
             goal_axis = _compact_goal_axis(play.get('goal_axis'))
             if goal_axis:
                 item['goal_axis'] = goal_axis
+        if play_type == 'bf':
+            item['probabilities'] = _compact_probabilities(play.get('probabilities'), 4)
+            scores_list = play.get('top3_scores')
+            if isinstance(scores_list, list):
+                item['top3_scores'] = [
+                    {'score': s.get('score'), 'probability': _round_number(s.get('probability'), 1)}
+                    for s in scores_list[:3] if isinstance(s, dict)
+                ]
         compact[play_type] = {key: value for key, value in item.items() if value not in (None, '', {})}
     return compact
 
@@ -877,6 +885,7 @@ def _analyze_single(db_path: str, match: dict) -> dict:
         # 12. 6项玩法推算(比分/胜平负/让球/大小球/半全场)
         result['play_predictions'] = _compute_all_plays(result, match, ou_result, db_path)
         _apply_selective_recommendation_guard(db_path, match, result)
+        _build_bf_play_entry(result.get('play_predictions', {}))
         _sync_final_prediction_scores(result)
 
         # 12b. 概率校准 — 用历史验证数据校准各玩法confidence, 直接提升命中率
@@ -3704,6 +3713,46 @@ def _apply_selective_recommendation_guard(db_path: str, match: dict, result: dic
     result['recommendation_gate'] = summary
 
 
+def _build_bf_play_entry(plays: dict) -> None:
+    """Build bf dict entry from top3_scores so _save_play_predictions persists it.
+
+    top3_scores is a list (not dict), so _save_play_predictions skips it.
+    We need a dict entry with play_type='bf' for the predictions table.
+    """
+    if not isinstance(plays, dict):
+        return
+    top_scores = plays.get('top3_scores')
+    if not isinstance(top_scores, list) or not top_scores:
+        plays['bf'] = {'direction': '', 'recommendation': '', 'probabilities': {}, 'confidence': 0}
+        return
+    # Build recommendation from top score
+    best = top_scores[0] if isinstance(top_scores[0], dict) else {}
+    best_score = str(best.get('score', '')).replace('-', ':')
+    # Build probabilities dict from top3
+    bf_probs = {}
+    total_prob = 0.0
+    for item in top_scores[:3]:
+        if not isinstance(item, dict):
+            continue
+        score_key = str(item.get('score', '')).replace('-', ':')
+        prob = _to_float(item.get('probability'), 0.0) or 0.0
+        if prob > 1:
+            prob = prob / 100.0
+        bf_probs[score_key] = round(prob, 4)
+        total_prob += prob
+    plays['bf'] = {
+        'direction': best_score,
+        'recommendation': best_score,
+        'recommendation_cn': best_score,
+        'probabilities': bf_probs,
+        'confidence': round(total_prob, 4),
+        'confidence_tier': best.get('confidence_tier'),
+        'confidence_level': _tier_to_confidence_level(best.get('confidence_tier')) if best.get('confidence_tier') else None,
+        'recommendation_gate': best.get('recommendation_gate'),
+        'top3_scores': top_scores,
+    }
+
+
 def _compute_all_plays(result: dict, match: dict, ou_result: dict = None, db_path: str = None) -> dict:
     """从Poisson比分矩阵推算全部6项玩法
 
@@ -4244,6 +4293,18 @@ def _apply_bqc_stability_reuse(db_path: str, match: dict, plays: dict) -> bool:
             'source_created_at': previous.get('created_at'),
         }
         return False
+    if not current_structural and previous_structural:
+        current['stability_reuse_skipped'] = {
+            'applied': False,
+            'reason': 'current_is_clean_previous_has_forced_adjustment',
+            'current_candidate': current_rec,
+            'current_candidate_cn': current.get('recommendation_cn'),
+            'previous_candidate': previous_rec,
+            'previous_candidate_cn': previous_bqc.get('recommendation_cn'),
+            'source_report_id': previous.get('report_id'),
+            'source_created_at': previous.get('created_at'),
+        }
+        return False
 
     preserved = _clone_jsonable(previous_bqc)
     if not isinstance(preserved, dict):
@@ -4385,6 +4446,7 @@ def _compute_plays_from_probs(probs, expected, match, db_path: str = None) -> di
         'ou': ou,
         'bqc': {},
     }
+    _build_bf_play_entry(plays)
     _apply_play_consistency(plays)
     _apply_play_risk_profiles(plays, {'final_prediction': {'probabilities': probs}}, None)
     _ensure_spf_recommendation_fields(plays)
