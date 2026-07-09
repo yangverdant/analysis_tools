@@ -49,7 +49,8 @@ def _utc_from_beijing(value: Any) -> Optional[str]:
     for width, fmt in ((19, "%Y-%m-%d %H:%M:%S"), (16, "%Y-%m-%d %H:%M")):
         try:
             dt = datetime.strptime(text[:width], fmt)
-            return (dt - timedelta(hours=8)).strftime("%Y-%m-%dT%H:%M:%S")
+            from backend.app.core.time_utils import beijing_to_utc
+            return beijing_to_utc(dt).strftime("%Y-%m-%dT%H:%M:%S")
         except ValueError:
             continue
     return None

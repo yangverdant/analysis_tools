@@ -1380,7 +1380,13 @@ async def get_lottery_matches(
             params.extend([date, date])
         else:
             # 默认今天和未来7天 (based on beijing_time or match_date)
-            query += " AND (beijing_time >= datetime('now', '-6 hours') OR (beijing_time IS NULL AND match_date >= date('now')))"
+            # beijing_time is stored in Beijing time, so compare against Beijing now
+            from backend.app.core.time_utils import now_beijing
+            from datetime import timedelta as _td
+            bj_cutoff = (now_beijing() - _td(hours=6)).strftime('%Y-%m-%d %H:%M:%S')
+            bj_today = now_beijing().strftime('%Y-%m-%d')
+            query += " AND (beijing_time >= ? OR (beijing_time IS NULL AND match_date >= ?))"
+            params.extend([bj_cutoff, bj_today])
 
         if status:
             query += " AND sell_status = ?"
@@ -1430,11 +1436,38 @@ async def get_lottery_matches(
         if date:
             matches = [match for match in matches if _display_match_date(match) == date]
 
+        # 队名中文化: 英文名→中文名
+        try:
+            from backend.app.core.name_service import NameService
+            ns = NameService()
+            for match in matches:
+                h_cn = match.get('home_team_cn') or ''
+                a_cn = match.get('away_team_cn') or ''
+                if h_cn and not ns.is_chinese(h_cn):
+                    translated = ns.to_cn(h_cn)
+                    if translated:
+                        match['home_team_cn'] = translated
+                if a_cn and not ns.is_chinese(a_cn):
+                    translated = ns.to_cn(a_cn)
+                    if translated:
+                        match['away_team_cn'] = translated
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error('NameService translation failed: %s', e)
+
         # 处理 play_types JSON，并检查分析状态
         analyzed_ids = set()
-        cursor.execute("SELECT DISTINCT lottery_match_id FROM lottery_analysis_reports WHERE report_type IN ('prediction', 'full')")
+        report_cols = get_table_columns(cursor, "lottery_analysis_reports")
+        stale_filter_analyzed = "AND COALESCE(is_stale, 0) = 0" if "is_stale" in report_cols else ""
+        cursor.execute(f"SELECT DISTINCT lottery_match_id FROM lottery_analysis_reports WHERE report_type IN ('prediction', 'full') {stale_filter_analyzed}")
         for row in cursor.fetchall():
             analyzed_ids.add(row[0])
+        # Also include matches that have predictions in lottery_predictions table
+        pred_cols = get_table_columns(cursor, "lottery_predictions")
+        if pred_cols:
+            cursor.execute("SELECT DISTINCT lottery_match_id FROM lottery_predictions")
+            for row in cursor.fetchall():
+                analyzed_ids.add(row[0])
 
         # 获取已结束比赛的结果数据
         result_ids = set()
@@ -1736,6 +1769,36 @@ async def get_lottery_matches(
                             match['ou_rec'] = ou_data.get('recommendation', '') or '--'
                     except:
                         pass
+
+                # Fallback: if no report found, try lottery_predictions table
+                if not report_row or not match.get('main_recommendation') or match.get('main_recommendation') == '--':
+                    cursor.execute("""
+                        SELECT play_type, recommendation, confidence, confidence_level, predictions
+                        FROM lottery_predictions
+                        WHERE lottery_match_id = ?
+                        ORDER BY datetime(created_at) DESC
+                    """, (match['lottery_match_id'],))
+                    pred_rows = cursor.fetchall()
+                    if pred_rows:
+                        spf_labels = {'3': '主胜', '1': '平局', '0': '客胜'}
+                        bqc_labels = {'33': '胜胜', '31': '胜平', '30': '胜负',
+                                      '13': '平胜', '11': '平平', '10': '平负',
+                                      '03': '负胜', '01': '负平', '00': '负负',
+                                      'hh': '胜胜', 'hd': '胜平', 'ha': '胜负',
+                                      'dh': '平胜', 'dd': '平平', 'da': '平负',
+                                      'ah': '负胜', 'ad': '负平', 'aa': '负负'}
+                        for prow in pred_rows:
+                            pt, rec, conf, conf_level, preds_json = prow
+                            if pt == 'spf' and (not match.get('main_recommendation') or match['main_recommendation'] == '--'):
+                                match['main_recommendation'] = spf_labels.get(rec, rec) or rec or '--'
+                                if conf:
+                                    match['confidence_level'] = conf_level or ('high' if conf >= 0.6 else ('medium' if conf >= 0.35 else 'low'))
+                            elif pt == 'rqspf' and not match.get('rqspf_rec'):
+                                match['rqspf_rec'] = normalize_rqspf_rec(rec) or '--'
+                            elif pt == 'bqc' and not match.get('bqc_rec'):
+                                match['bqc_rec'] = bqc_labels.get(rec, rec) or rec or '--'
+                            elif pt == 'ou' and not match.get('ou_rec'):
+                                match['ou_rec'] = rec or '--'
 
             if not match.get('rqspf_rec') and match.get('rqspf_odds'):
                 match['rqspf_rec'] = derive_rqspf_rec_from_odds(match['rqspf_odds'])

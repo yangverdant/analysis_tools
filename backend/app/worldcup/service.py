@@ -6,12 +6,13 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from backend.app.core.time_utils import BEIJING_TZ
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 LOCAL_MATCHES_PATH = PROJECT_ROOT / "data" / "world_cup" / "wc_2026_matches.json"
 THIRD_PLACE_TABLE_PATH = PROJECT_ROOT / "data" / "world_cup" / "wc_2026_third_place_table.wiki"
 API_CONFIG_PATH = PROJECT_ROOT / "config" / "api_config.json"
 GROUP_KEYS = list("ABCDEFGHIJKL")
-BEIJING_TZ = timezone(timedelta(hours=8))
 THIRD_PLACE_ASSIGNMENT_COLUMNS = ["1A", "1B", "1D", "1E", "1G", "1I", "1K", "1L"]
 THIRD_PLACE_WINNER_MATCH = {
     "1A": 79,

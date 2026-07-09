@@ -2058,7 +2058,7 @@ def _save_report(db_path: str, match: dict, result: dict):
         conn.close()
         return report_id
     except Exception as e:
-        logger.debug('报告保存失败: %s', e)
+        logger.error('报告保存失败: %s', e)
         return None
 
 
@@ -3420,10 +3420,45 @@ def _base_tier_from_probability(play_type: str, probability: Optional[float]) ->
 
 
 def _analysis_scenario_type(match: dict, result: dict) -> str:
+    """\u8d5b\u4e8b\u573a\u666f\u7c7b\u578b \u2014 \u59d4\u6258CompetitionRuleEngine, \u6838\u5fc3\u533a\u5206: \u56fd\u5bb6\u961f vs \u4ff1\u4e50\u90e8"""
+    # 1. \u4f18\u5148\u4ecematch_profile\u83b7\u53d6 (CompetitionRuleEngine\u5df2\u5206\u7c7b)
+    profile = (result or {}).get('match_profile') or (match or {}).get('match_profile')
+    if isinstance(profile, dict):
+        participant = profile.get('participant_type', '')
+        comp_type = profile.get('competition_type', '')
+        if participant == 'national':
+            # \u56fd\u5bb6\u961f\u7ebf: \u53cb\u8c0a/\u9884\u9009/\u6b27\u56fd\u8054/\u5927\u8d5b\u6b63\u8d5b
+            if comp_type == 'friendly_intl':
+                return 'friendly_intl'
+            if comp_type == 'wc_qualifier':
+                return 'qualifier'
+            if comp_type == 'nations_league':
+                return 'nations_league'
+            if comp_type == 'tournament_intl':
+                return 'international_cup'
+            return 'friendly_intl'  # \u56fd\u5bb6\u961f\u9ed8\u8ba4\u53cb\u8c0a\u8d5b
+        else:
+            # \u4ff1\u4e50\u90e8\u7ebf: \u8054\u8d5b/\u56fd\u5185\u676f/\u6d32\u9645\u676f
+            if comp_type == 'cup':
+                # \u533a\u5206\u6d32\u9645\u676f\u548c\u56fd\u5185\u676f
+                league_text = ' '.join(
+                    str((match or {}).get(key) or '')
+                    for key in ('league_name_cn', 'league_name_en', 'league_name', 'competition', 'competition_name')
+                )
+                if any(token in league_text for token in ('\u6b27\u51a0', '\u6b27\u8054', '\u6b27\u534f', '\u89e3\u653e\u8005', '\u4e9a\u51a0', 'Champions League', 'Europa League', 'Conference League')):
+                    return 'continental_cup'
+                return 'domestic_cup'
+            if comp_type == 'super_cup':
+                return 'domestic_cup'
+            return 'league'
+
+    # 2. Fallback: \u4ececompetition_context\u83b7\u53d6
     context = (result or {}).get('competition_context') if isinstance((result or {}).get('competition_context'), dict) else {}
     context_type = str(context.get('type') or '').strip().lower()
     if context_type in {'friendly_intl', 'qualifier', 'nations_league'}:
         return context_type
+
+    # 3. Fallback: \u5173\u952e\u8bcd\u5339\u914d
     league_text = ' '.join(
         str((match or {}).get(key) or '')
         for key in ('league_name_cn', 'league_name_en', 'league_name', 'competition', 'competition_name')
@@ -4301,6 +4336,27 @@ def _apply_bqc_stability_reuse(db_path: str, match: dict, plays: dict) -> bool:
             'current_candidate_cn': current.get('recommendation_cn'),
             'previous_candidate': previous_rec,
             'previous_candidate_cn': previous_bqc.get('recommendation_cn'),
+            'source_report_id': previous.get('report_id'),
+            'source_created_at': previous.get('created_at'),
+        }
+        return False
+
+    # Reject if previous BQC has corrupted probabilities (hh=0 when current hh>0)
+    # This happens when bad scene transitions produced hh=0.0 in old reports
+    current_probs = current.get('probabilities') or {}
+    previous_probs = previous_bqc.get('probabilities') or {}
+    current_hh = current_probs.get('hh', 0)
+    previous_hh = previous_probs.get('hh', 0)
+    if current_hh > 0 and previous_hh == 0:
+        current['stability_reuse_skipped'] = {
+            'applied': False,
+            'reason': 'previous_bqc_has_corrupted_probabilities_hh_zero',
+            'current_candidate': current_rec,
+            'current_candidate_cn': current.get('recommendation_cn'),
+            'previous_candidate': previous_rec,
+            'previous_candidate_cn': previous_bqc.get('recommendation_cn'),
+            'current_hh': current_hh,
+            'previous_hh': previous_hh,
             'source_report_id': previous.get('report_id'),
             'source_created_at': previous.get('created_at'),
         }
@@ -9801,14 +9857,15 @@ def _compute_bqc(
                 full_away += prob
 
     # BQC = P(半场X) × P(全场Y|半场X)  (empirical transition matrix)
-    # Empirical P(FT|HT) from 30K matches:
-    #   HT=3(主胜): FT=3 77.6%, FT=1 15.9%, FT=0 6.5%
-    #   HT=1(平局): FT=3 34.9%, FT=1 40.1%, FT=0 25.1%
-    #   HT=0(客胜): FT=3 11.1%, FT=1 20.9%, FT=0 68.0%
+    # Updated from 228 lottery_results (2026-06~07):
+    #   HT=3(主胜): FT=3 76.2%, FT=1 17.5%, FT=0 6.2%
+    #   HT=1(平局): FT=3 43.5%, FT=1 33.7%, FT=0 22.8%
+    #   HT=0(客胜): FT=3 23.2%, FT=1 16.1%, FT=0 60.7%
+    # Key change vs 30K dataset: P(FT=h|HT=d) 34.9%→43.5%, reducing dd over-prediction
     _EMPIRICAL_TRANSITION = {
-        'h': {'h': 0.776, 'd': 0.159, 'a': 0.065},
-        'd': {'h': 0.349, 'd': 0.401, 'a': 0.251},
-        'a': {'h': 0.111, 'd': 0.209, 'a': 0.680},
+        'h': {'h': 0.762, 'd': 0.175, 'a': 0.062},
+        'd': {'h': 0.435, 'd': 0.337, 'a': 0.228},
+        'a': {'h': 0.232, 'd': 0.161, 'a': 0.607},
     }
     # 归因驱动: 若该场景有lottery_validation重算的transition, 优先使用
     try:

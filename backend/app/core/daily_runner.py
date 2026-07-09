@@ -107,12 +107,12 @@ def auto_recover(db_path: str):
             updated_at = stuck['updated_at']
             if updated_at:
                 # 检查是否超过2小时
-                from datetime import timedelta, timezone
-                utc_plus8 = timezone(timedelta(hours=8))
+                from datetime import timedelta
+                from backend.app.core.time_utils import BEIJING_TZ
                 try:
                     last_update = datetime.strptime(str(updated_at), '%Y-%m-%d %H:%M:%S')
-                    last_update = last_update.replace(tzinfo=utc_plus8)
-                    elapsed = datetime.now(utc_plus8) - last_update
+                    last_update = last_update.replace(tzinfo=BEIJING_TZ)
+                    elapsed = datetime.now(BEIJING_TZ) - last_update
                     if elapsed.total_seconds() > 7200:  # 2h
                         cursor.execute("""
                             UPDATE daily_cycle_state SET status = 'recovered',

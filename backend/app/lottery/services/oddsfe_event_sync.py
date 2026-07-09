@@ -207,7 +207,10 @@ class OddsfeEventDetailSync:
 
     def _beijing_time_from_event(self, event: Optional[Dict[str, Any]]) -> Optional[datetime]:
         started = _parse_timestamp((event or {}).get("event_start_at"))
-        return started + timedelta(hours=8) if started else None
+        if not started:
+            return None
+        from backend.app.core.time_utils import utc_to_beijing
+        return utc_to_beijing(started).replace(tzinfo=None)
 
     def _score_matches_existing_result(
         self,

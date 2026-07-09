@@ -1297,9 +1297,10 @@ def _update_match_meta(conn, lottery_match_id: str, matched_ev: dict):
     # 更新beijing_time: UTC+8h
     if start_at:
         try:
-            from datetime import datetime, timedelta as _td
+            from datetime import datetime
+            from backend.app.core.time_utils import utc_to_beijing
             utc_dt = datetime.fromisoformat(start_at)
-            bj_dt = utc_dt + _td(hours=8)
+            bj_dt = utc_to_beijing(utc_dt)
             bj_str = bj_dt.strftime('%Y-%m-%d %H:%M')
             updates.append('beijing_time = ?')
             params.append(bj_str)

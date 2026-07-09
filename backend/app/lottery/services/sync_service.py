@@ -20,12 +20,13 @@ import sys
 import time
 import unicodedata
 import requests
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 
 from ..data_sources.scrapers.lottery_crawler import LotteryCrawlerSync
 from ..etl.entity_mapper import EntityMapper
 from ..dao.lottery_dao import LotteryMatchDAO, LotteryOddsDAO
 from backend.app.data_access.foundation_dao import FoundationDAO
+from backend.app.core.time_utils import BEIJING_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -1082,7 +1083,7 @@ class LotterySyncService:
                     try:
                         mt_short = match_time_str[:5] if len(match_time_str) > 5 else match_time_str
                         bj_approx = datetime.strptime(f"{md} {mt_short}", '%Y-%m-%d %H:%M')
-                        utc_approx = bj_approx - timedelta(hours=8)
+                        utc_approx = bj_approx.replace(tzinfo=BEIJING_TZ).astimezone(timezone.utc).replace(tzinfo=None)
                         candidates = []
                         for ev in all_events:
                             try:
@@ -1131,7 +1132,7 @@ class LotterySyncService:
                         utc_dt = datetime.fromisoformat(start_str.replace('Z', '+00:00'))
                     else:
                         utc_dt = datetime.strptime(start_str[:19], '%Y-%m-%d %H:%M:%S')
-                    bj_dt = utc_dt + timedelta(hours=8)
+                    bj_dt = utc_dt.replace(tzinfo=timezone.utc).astimezone(BEIJING_TZ).replace(tzinfo=None)
                     bj_str = bj_dt.strftime('%Y-%m-%d %H:%M')
                     bj_date = bj_dt.strftime('%Y-%m-%d')
                     bj_time = bj_dt.strftime('%H:%M:%S')
@@ -1527,7 +1528,7 @@ class LotterySyncService:
                         # match_time from sporttery is Beijing time
                         mt_short = match_time_str[:5] if len(match_time_str) > 5 else match_time_str
                         bj_approx = datetime.strptime(f"{m['match_date']} {mt_short}", '%Y-%m-%d %H:%M')
-                        utc_approx = bj_approx - timedelta(hours=8)
+                        utc_approx = bj_approx.replace(tzinfo=BEIJING_TZ).astimezone(timezone.utc).replace(tzinfo=None)
                         # Search all events for ones within +/-2h UTC
                         candidates = []
                         for ev in all_events:

@@ -425,7 +425,14 @@ def _apply_ht_transition_recompute(conn, scene, play_type, params) -> Optional[d
     sample_count = params.get('sample_count', 0)
     reason = params.get('reason', '')
 
-    if not transition or sample_count < 5:
+    if not transition or sample_count < 30:
+        return None
+
+    # 合理性检查: h→h和a→a必须>40%, 否则小样本偏差严重
+    # 与_load_scene_ht_transition的sanity check对齐
+    hh = transition.get('h', {}).get('h', 0)
+    aa = transition.get('a', {}).get('a', 0)
+    if hh < 0.40 or aa < 0.40:
         return None
 
     # 检查是否已有相同transition记录 (避免重复)

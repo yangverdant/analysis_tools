@@ -151,11 +151,11 @@ async def get_today_matches():
 
     # 北京时间"今天"可能跨两个UTC日期(北京0:00=UTC前一天16:00)
     # 所以查 match_date 在 yesterday~tomorrow 范围，转北京时间后再过滤
-    from datetime import datetime as _dt, timedelta as _td
-    now_bj = _dt.utcnow() + _td(hours=8)
+    from backend.app.core.time_utils import now_beijing, yesterday_beijing, tomorrow_beijing
+    now_bj = now_beijing()
     bj_today = now_bj.strftime('%Y-%m-%d')
-    bj_yesterday = (now_bj - _td(days=1)).strftime('%Y-%m-%d')
-    bj_tomorrow = (now_bj + _td(days=1)).strftime('%Y-%m-%d')
+    bj_yesterday = yesterday_beijing()
+    bj_tomorrow = tomorrow_beijing()
 
     query = """
         SELECT m.match_id, m.match_date, m.match_time, m.time_type,

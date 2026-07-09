@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from backend.app.core.time_utils import BEIJING_TZ
 from backend.app.data_access.foundation_dao import FoundationDAO
 from backend.app.lottery.services.oddsfe_event_sync import OddsfeEventDetailSync
 from backend.app.lottery.services.ou_calculator import compute_ou_result
@@ -27,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 SOURCE_NAME = "football_data_org"
 WORLD_CUP_CN = "\u4e16\u754c\u676f"
-BEIJING_TZ = timezone(timedelta(hours=8))
 FINISHED_STATUSES = {"finished", "fin", "ft"}
 
 NAME_ALIASES = {
