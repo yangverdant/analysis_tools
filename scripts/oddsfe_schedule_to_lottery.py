@@ -133,18 +133,25 @@ def _resolve_league_cn(tournament: str, category: str) -> Optional[str]:
 
 
 def _cn_team_name(conn: sqlite3.Connection, name_en: str) -> str:
-    """Translate EN team name to CN via teams table + team_aliases fallback.
+    """Translate EN team name to CN via NameService (unified mapping).
 
-    5-layer matching:
-    1. Direct exact match on teams.name_en
-    2. team_aliases.alias_name exact match
-    3. Case-insensitive exact match
-    4. Fuzzy: teams.name_en contains the input as a word (handles "Seoul" -> "FC Seoul")
-    5. Fallback: return EN as-is
+    Falls back to EN if no CN translation found.
+    Automatically learns new mappings via NameService.learn().
     """
     if not name_en:
         return ""
-    # 1. Direct match
+    try:
+        import sys
+        sys.path.insert(0, '/opt/football_tools')
+        from backend.app.core.name_service import NameService
+        db_path = '/opt/football_tools/data/football_v2.db'
+        ns = NameService(db_path)
+        cn = ns.to_cn(name_en)
+        if cn:
+            return cn
+    except Exception:
+        pass
+    # Fallback: original 5-layer DB search
     row = conn.execute(
         "SELECT name_cn FROM teams WHERE name_en = ? LIMIT 1", (name_en,)
     ).fetchone()

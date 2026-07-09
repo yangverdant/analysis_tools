@@ -1685,10 +1685,18 @@ class LotterySyncService:
             if cn in self._cn_to_en and self._cn_to_en[cn] == en:
                 continue  # ��֪ӳ��
 
-            # д��JSON
+            # 通知NameService (持久化到JSON+DB+内存)
+            try:
+                from backend.app.core.name_service import NameService
+                ns = NameService(self.db_path)
+                ns.learn(cn, en, 'auto_bridge')
+            except Exception:
+                pass
+
+            # 写入JSON (旧路径, 兼容)
             _save_cn_en_mapping(cn, en)
 
-            # �����ڴ滺��
+            # 更新内存缓存
             self._cn_to_en[cn] = en
 
             # д��DB team_name_mapping (����ж�Ӧteam_id)

@@ -197,6 +197,17 @@ _EN_CN_DIRECT = {
     'Iberia 1999': '伊比利亚1999', 'Petrocub': '彼得罗库布',
     'Zilina': '日利纳', 'Univ. Craiova': '克拉约瓦大学',
     'ML Vitebsk': '维捷布斯克',
+    # 欧冠/欧联资格赛 (7月8日场次)
+    'Kauno Zalgiris': '考纳斯扎尔吉里斯', 'Drita': '德里塔',
+    'Inter Escaldes': '埃斯卡尔德斯国际', 'Ararat-Armenia': '阿拉拉特亚美尼亚',
+    'Floriana': '弗洛里亚纳', 'Tre Fiori': '特雷菲奥里',
+    'Larne': '拉恩', 'Bissen': '比森',
+    'Vikingur Reykjavik': '雷克雅未克维京人', 'Gyor': '杰尔',
+    'Kairat Almaty': '阿拉木图凯拉特', 'Sutjeska': '苏特耶斯卡',
+    'Vardar': '瓦尔达尔', 'KuPS': '库奥皮奥',
+    'Rafioreta': '拉菲奥里塔', 'Borisov': '鲍里索夫',
+    'Shamrock Rovers': '沙姆洛克流浪', 'Lincoln Red Imps': '林肯红魔',
+    'Sabail': '萨巴赫', 'Floriana': '弗洛里亚纳',
     # 巴西/南美
     'Ponte Preta': '庞特普雷塔', 'Criciuma': '克里西乌马',
     'Guayaquil City': '瓜亚基尔城', 'Ind. del Valle': '山谷独立',
@@ -283,10 +294,10 @@ class NameService:
     # ── CN↔EN查找 ──────────────────────────────────────
 
     def to_cn(self, name_en: str) -> Optional[str]:
-        """英文名→中文名, 多级查找"""
+        """英文名→中文名, 多级查找, 含自动学习"""
         if not name_en:
             return None
-        # 1. 内存映射 (JSON + 额外)
+        # 1. 内存映射 (JSON + 额外 + 直接映射)
         key = name_en.strip()
         key_lower = key.lower()
         if key in self._en_to_cn:
@@ -297,13 +308,26 @@ class NameService:
         norm = self.normalize(key)
         if norm in self._en_to_cn:
             return self._en_to_cn[norm]
-        # 3. DB查找
+        norm_alpha = self.normalize_alpha(key)
+        if norm_alpha and norm_alpha in self._en_to_cn:
+            return self._en_to_cn[norm_alpha]
+        # 3. DB查找 (精确+规范化)
         if self._db_path:
             cn = self._db_lookup_en_to_cn(key)
             if cn:
                 return cn
         # 4. 模糊匹配
-        return self._fuzzy_to_cn(key)
+        cn = self._fuzzy_to_cn(key)
+        if cn:
+            return cn
+        # 5. DB深度模糊匹配 (normalize_alpha比较)
+        if self._db_path:
+            cn = self._db_deep_lookup_en_to_cn(key, norm_alpha)
+            if cn:
+                # 自动学习: 找到了就记住
+                self.learn(cn, key, 'auto_db_match')
+                return cn
+        return None
 
     def to_en(self, name_cn: str) -> Optional[str]:
         """中文名→英文名, 多级查找"""
@@ -538,6 +562,38 @@ class NameService:
                 best_score = score
                 best_cn = cn_val
         return best_cn
+
+    def _db_deep_lookup_en_to_cn(self, name_en: str, norm_alpha: str) -> Optional[str]:
+        """DB深度模糊匹配: normalize_alpha比较teams表的name_en
+
+        策略: 将teams表所有name_en做normalize_alpha, 与输入比较
+        匹配到后返回对应的name_cn(如果有), 否则返回None
+        """
+        if not norm_alpha or len(norm_alpha) < 3:
+            return None
+        import sqlite3
+        try:
+            conn = sqlite3.connect(self._db_path, timeout=10)
+            c = conn.cursor()
+            c.execute("SELECT name_en, name_cn FROM teams WHERE name_cn IS NOT NULL AND name_cn != ''")
+            best_score = 0.0
+            best_cn = None
+            for en, cn in c.fetchall():
+                if not self.is_chinese(cn):
+                    continue
+                db_alpha = self.normalize_alpha(en)
+                if db_alpha == norm_alpha:
+                    conn.close()
+                    return cn
+                # 模糊匹配
+                score = SequenceMatcher(None, norm_alpha, db_alpha).ratio()
+                if score > best_score and score >= 0.85:
+                    best_score = score
+                    best_cn = cn
+            conn.close()
+            return best_cn
+        except Exception:
+            return None
 
     def _save_to_json(self, name_en: str, name_cn: str):
         """持久化到team_chinese_names.json"""
