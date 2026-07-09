@@ -9925,6 +9925,23 @@ def _compute_bqc(
         for k in bqc_raw:
             bqc_probs[k] = round(bqc_raw[k] / total_bqc, 3)
 
+    # 均衡化: hh过度主导时(dh/hh比例<0.3), 从hh转移部分概率到dh
+    # 原因: h→h=0.762的经验transition导致hh概率虚高, 实际比赛中领先方下半场
+    # 被追平的概率远高于transition暗示的(数据: pred=33 actual=13有15次)
+    if bqc_probs.get('hh', 0) > 0.25:
+        hh = bqc_probs.get('hh', 0)
+        dh = bqc_probs.get('dh', 0)
+        if dh / max(hh, 0.01) < 0.3:
+            transfer = hh * 0.15  # 从hh转移15%到dh
+            bqc_probs['hh'] = round(hh - transfer, 3)
+            bqc_probs['dh'] = round(dh + transfer * 0.7, 3)
+            bqc_probs['hd'] = round(bqc_probs.get('hd', 0) + transfer * 0.3, 3)
+            # 重新归一化
+            total = sum(bqc_probs.values())
+            if total > 0:
+                for k in bqc_probs:
+                    bqc_probs[k] = round(bqc_probs[k] / total, 3)
+
     # 推荐：半全场是全场方向的路径推导，先在胜平负主轴内择优。
     # 始终约束到SPF全场方向(数据验证: always-axis=35.8% vs gated-axis=34.2%)
     axis_enabled = _env_float('FOOTBALL_BQC_SPF_AXIS_ENABLED', 1.0, 0.0, 1.0) >= 1.0
