@@ -408,10 +408,15 @@ def _rank_value_bets(predictions: List[dict]) -> List[dict]:
             if not candidate_bets:
                 continue
 
-            # 取该场最大edge的玩法作为推荐
-            best_bet = max(candidate_bets, key=lambda x: x.get('edge', 0))
-            # 只有edge>0.03(3pp)才值得投注
-            if best_bet.get('edge', 0) < 0.03:
+            # 取该场最大期望价值的玩法作为推荐
+            # EV = edge × play_type_accuracy (而非纯edge, 避免rqspf高edge低准确率)
+            play_accuracy = {'spf': 0.54, 'rqspf': 0.48, 'ou': 0.51, 'bqc': 0.31, 'bf': 0.27}
+            for cb in candidate_bets:
+                pt = cb.get('play_type', 'spf')
+                cb['ev'] = cb.get('edge', 0) * play_accuracy.get(pt, 0.4)
+            best_bet = max(candidate_bets, key=lambda x: x.get('ev', 0))
+            # 只有EV>0.015才值得投注 (edge × accuracy > 1.5%)
+            if best_bet.get('ev', 0) < 0.015:
                 continue
 
             kelly = max(0, best_bet.get('edge', 0) * 2)
