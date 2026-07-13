@@ -71,9 +71,11 @@ class SportterySyncService:
             new_matches.append(match)
             self._known_match_ids.add(match_id)
 
-            # 插入数据库
+            # INSERT OR IGNORE preserves existing rows (including oddsfe_event_id bridge).
+            # INSERT OR REPLACE would DELETE the existing row and lose the eid bridge,
+            # causing oddsfe to re-insert a duplicate on the next tick.
             self.db_cursor.execute('''
-                INSERT OR REPLACE INTO lottery_matches
+                INSERT OR IGNORE INTO lottery_matches
                 (lottery_match_id, match_id, home_team_cn, away_team_cn,
                  league_name_cn, match_date, match_time, beijing_time,
                  play_types, sell_status, handicap_line, created_at, updated_at)
@@ -91,6 +93,23 @@ class SportterySyncService:
                 match.get('sell_status', 'selling'),
                 match.get('handicap_line', 0)
             ))
+            if self.db_cursor.rowcount == 0:
+                # Row exists — update crawler fields, preserve oddsfe_event_id
+                self.db_cursor.execute('''
+                    UPDATE lottery_matches SET
+                        sell_status = ?,
+                        play_types = ?,
+                        handicap_line = ?,
+                        match_time = COALESCE(?, match_time),
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE lottery_match_id = ?
+                ''', (
+                    match.get('sell_status', 'selling'),
+                    ','.join(match.get('play_types', [])),
+                    match.get('handicap_line', 0),
+                    match.get('match_time'),
+                    match_id
+                ))
             saved += 1
 
         self.db_conn.commit()

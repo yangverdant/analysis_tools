@@ -30,21 +30,33 @@ router = APIRouter(prefix="/api/v1/lottery", tags=["lottery"])
 LOTTERY_CORE_LEAGUES = {
     # 国际赛
     "世界杯", "欧洲杯", "亚洲杯", "非洲杯", "美洲杯",
-    "国际赛",  # 友谊赛
+    "国际赛", "俱乐部友谊赛",
     # 五大联赛
     "英超", "西甲", "德甲", "意甲", "法甲",
     # 五大次级
-    "英冠", "西乙", "德乙", "意乙", "法乙",
+    "英冠", "英甲", "英乙", "西乙", "德乙", "德丙", "意乙", "法乙",
+    # 五大杯赛
+    "英联杯", "足总杯", "社区盾杯", "国王杯", "德国杯", "意大利杯",
+    "法国杯", "法联杯",
     # 欧洲主流
-    "荷甲", "比甲", "葡超", "苏超",
+    "荷甲", "荷乙", "比甲", "葡超", "葡甲", "苏超", "苏冠",
+    "奥甲", "瑞士超", "丹超", "捷甲", "波超", "希腊超",
+    "土超", "土甲", "俄超", "乌超", "克甲", "塞超", "罗甲", "匈甲", "以超",
     # 欧洲杯赛
-    "欧冠", "欧联", "欧协联",
+    "欧冠", "欧联", "欧协联", "欧超杯",
     # 美洲主流
-    "美职", "巴甲", "阿超",
+    "美职", "美乙", "美职联杯", "墨超", "巴甲", "巴乙",
+    "阿甲", "哥伦甲", "厄甲", "智利甲", "智利杯",
+    "秘鲁甲", "乌拉甲", "巴拉甲", "阿根廷杯",
     # 亚洲主流
-    "日职", "韩职", "沙特联",
-    # 国内
-    "中超", "中甲",
+    "日职", "日乙", "日联杯", "韩职", "韩乙", "韩联杯",
+    "澳超", "中超", "中甲", "中乙", "足协杯",
+    "沙特联", "卡塔尔联", "阿联酋联", "伊朗超",
+    "泰超", "泰甲", "越南联", "印尼甲",
+    # 亚洲杯赛
+    "亚冠", "亚联杯",
+    # 北欧
+    "瑞超", "瑞甲", "挪超", "挪甲", "芬超", "芬甲", "冰岛超", "丹甲",
 }
 
 # 数据库路径 - 云端优先使用环境变量，本地使用项目相对路径
@@ -1347,6 +1359,7 @@ async def get_lottery_matches(
     date: Optional[str] = Query(None, description="日期 (YYYY-MM-DD)"),
     status: Optional[str] = Query(None, description="销售状态 (selling/stopped/closed)"),
     play_type: Optional[str] = Query(None, description="玩法筛选 (spf/bf/bqc/rqspf)"),
+    league: Optional[str] = Query(None, description="联赛筛选 (league_name_cn)"),
     include_all: bool = Query(False, description="包含非体彩在售联赛(默认仅核心联赛)"),
     limit: int = Query(50, ge=1, le=200)
 ):
@@ -1391,6 +1404,10 @@ async def get_lottery_matches(
         if status:
             query += " AND sell_status = ?"
             params.append(status)
+
+        if league:
+            query += " AND league_name_cn = ?"
+            params.append(league)
 
         query += " ORDER BY CASE WHEN beijing_time IS NOT NULL THEN beijing_time ELSE match_date || ' ' || COALESCE(match_time, '99:99') END ASC LIMIT ?"
         params.append(limit)
@@ -2824,6 +2841,42 @@ async def retry_automation_center_failed(
     except Exception as exc:
         logger.error("automation retry failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/matches/leagues")
+async def get_lottery_match_leagues(
+    date: Optional[str] = Query(None, description="日期 (YYYY-MM-DD)"),
+    include_all: bool = Query(False, description="包含非体彩在售联赛"),
+):
+    """获取当前可选联赛列表(含每联赛比赛数)"""
+    conn = get_db()
+    cursor = conn.cursor()
+    try:
+        query = "SELECT league_name_cn, COUNT(*) as cnt FROM lottery_matches WHERE 1=1"
+        params = []
+
+        if not include_all:
+            placeholders = ",".join(["?" for _ in LOTTERY_CORE_LEAGUES])
+            query += f" AND league_name_cn IN ({placeholders})"
+            params.extend(sorted(LOTTERY_CORE_LEAGUES))
+
+        if date:
+            query += " AND (substr(beijing_time, 1, 10) = ? OR (beijing_time IS NULL AND match_date = ?))"
+            params.extend([date, date])
+        else:
+            from backend.app.core.time_utils import now_beijing
+            from datetime import timedelta as _td
+            bj_cutoff = (now_beijing() - _td(hours=6)).strftime('%Y-%m-%d %H:%M:%S')
+            bj_today = now_beijing().strftime('%Y-%m-%d')
+            query += " AND (beijing_time >= ? OR (beijing_time IS NULL AND match_date >= ?))"
+            params.extend([bj_cutoff, bj_today])
+
+        query += " GROUP BY league_name_cn ORDER BY cnt DESC"
+        cursor.execute(query, params)
+        leagues = [{"name": row[0], "count": row[1]} for row in cursor.fetchall()]
+        return {"leagues": leagues}
+    finally:
+        conn.close()
 
 
 @router.get("/matches/{lottery_match_id}")

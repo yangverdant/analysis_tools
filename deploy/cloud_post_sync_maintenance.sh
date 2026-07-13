@@ -196,13 +196,37 @@ Unit=football-daily-push.service
 WantedBy=timers.target
 EOF
 
+  cat >/etc/systemd/system/football-db-backup.service <<EOF
+[Unit]
+Description=Football DB daily backup
+
+[Service]
+Type=oneshot
+User=ubuntu
+ExecStart=/bin/bash -c "mkdir -p /opt/football_tools_backups/runtime && sqlite3 $DB_PATH .backup /opt/football_tools_backups/runtime/football_v2_backup_\$(date +%%Y%%m%%d).db && find /opt/football_tools_backups/runtime/ -name football_v2_backup_*.db -mtime +3 -delete"
+Nice=15
+EOF
+
+  cat >/etc/systemd/system/football-db-backup.timer <<EOF
+[Unit]
+Description=Daily football DB backup at 01:00
+
+[Timer]
+OnCalendar=*-*-* 01:00 Asia/Shanghai
+Persistent=true
+Unit=football-db-backup.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
   if crontab -l >/tmp/football_root_crontab 2>/dev/null; then
     grep -v 'backend.app.core.daily_runner' /tmp/football_root_crontab >/tmp/football_root_crontab.filtered || true
     crontab /tmp/football_root_crontab.filtered
   fi
 
   systemctl daemon-reload
-  systemctl enable --now football-automation-tick.timer football-learning-refresh.timer football-daily-morning.timer football-daily-push.timer >/dev/null
+  systemctl enable --now football-automation-tick.timer football-learning-refresh.timer football-daily-morning.timer football-daily-push.timer football-db-backup.timer >/dev/null
 }
 
 ensure_data_permissions

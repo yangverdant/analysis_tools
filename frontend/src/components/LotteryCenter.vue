@@ -658,6 +658,15 @@
 
       </div>
 
+      <div class="league-filter">
+        <select v-model="selectedLeague" class="league-select" @change="onLeagueChange">
+          <option value="">全部联赛</option>
+          <option v-for="lg in availableLeagues" :key="lg.name" :value="lg.name">
+            {{ lg.name }} ({{ lg.count }})
+          </option>
+        </select>
+      </div>
+
       <div class="sync-area">
         <button class="sync-btn result-sync-btn" :disabled="resultSyncing" @click="syncEventDetails">
 
@@ -2789,6 +2798,8 @@ export default {
     const selectedMatch = ref(null)
 
     const visibleLeagueIds = ref(null) // null = show all, Set = only those
+    const selectedLeague = ref('') // '' = all leagues
+    const availableLeagues = ref([]) // [{name, count}]
 
     // 通用超时fetch
     const fetchWithTimeout = (url, options = {}, timeoutMs = 120000) => {
@@ -4992,6 +5003,24 @@ const futureReanalysisExampleText = (run, persistedChanges = []) => {
 
 
 
+    const fetchLeagues = async () => {
+      try {
+        const dateStr = formatDate(selectedDate.value)
+        const response = await fetch(`/api/v1/lottery/matches/leagues?date=${dateStr}`)
+        if (response.ok) {
+          const data = await response.json()
+          availableLeagues.value = data.leagues || []
+        }
+      } catch (e) {
+        console.error('获取联赛列表失败:', e)
+      }
+    }
+
+    const onLeagueChange = () => {
+      // Re-fetch matches with league filter
+      fetchMatches()
+    }
+
     const fetchMatches = async () => {
 
       loading.value = true
@@ -4999,8 +5028,10 @@ const futureReanalysisExampleText = (run, persistedChanges = []) => {
       try {
 
         const dateStr = formatDate(selectedDate.value)
-
-        const response = await fetch(`/api/v1/lottery/matches?date=${dateStr}`)
+        let url = `/api/v1/lottery/matches?date=${dateStr}&include_all=true&limit=200`
+        if (selectedLeague.value) {
+          url += `&league=${encodeURIComponent(selectedLeague.value)}`
+        }
 
         const contentType = response.headers.get('content-type') || ''
         if (!response.ok) {
@@ -5176,7 +5207,11 @@ const futureReanalysisExampleText = (run, persistedChanges = []) => {
 
 
 
-    watch(selectedDate, fetchMatches)
+    watch(selectedDate, () => {
+      selectedLeague.value = ''
+      fetchLeagues()
+      fetchMatches()
+    })
 
     watch(activeTab, (tab) => {
       if (tab === 'health') {
@@ -5192,6 +5227,7 @@ const futureReanalysisExampleText = (run, persistedChanges = []) => {
 
       loadVisibleLeagues()
 
+      fetchLeagues()
       fetchMatches()
 
       fetchAccuracyData()
@@ -5683,6 +5719,36 @@ const futureReanalysisExampleText = (run, persistedChanges = []) => {
 
   border: 1px solid rgba(31, 41, 55, 0.8);
 
+  gap: 12px;
+
+  flex-wrap: wrap;
+
+}
+
+.league-filter {
+  display: flex;
+  align-items: center;
+}
+
+.league-select {
+  background: #1e2533;
+  color: #e2e8f0;
+  border: 1px solid rgba(31, 41, 55, 0.8);
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  min-width: 160px;
+  cursor: pointer;
+  outline: none;
+}
+
+.league-select:focus {
+  border-color: #3b82f6;
+}
+
+.league-select option {
+  background: #1e2533;
+  color: #e2e8f0;
 }
 
 

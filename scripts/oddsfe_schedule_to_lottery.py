@@ -42,12 +42,16 @@ LEAGUE_WHITELIST: Dict[str, List[Tuple[str, str]]] = {
     "中超": [("Chinese Super League", "China"), ("Super League", "China")],
     "中甲": [("League One", "China")],
     "中乙": [("League Two", "China")],
+    "足协杯": [("FA Cup", "China"), ("CFA Cup", "China")],
     # 日韩
     "日职": [("J1 League", "Japan")],
     "日乙": [("J2 League", "Japan")],
+    "日联杯": [("J-League Cup", "Japan")],
     "韩职": [("K League 1", "South Korea")],
     "韩乙": [("K League 2", "South Korea")],
-    "韩联杯": [("Korean Cup", "South Korea")],
+    "韩联杯": [("Korean Cup", "South Korea"), ("Korean League Cup", "South Korea")],
+    # 澳超
+    "澳超": [("A-League", "Australia"), ("A-League Men", "Australia")],
     # 北欧
     "瑞超": [("Allsvenskan", "Sweden")],
     "瑞甲": [("Superettan", "Sweden")],
@@ -56,50 +60,89 @@ LEAGUE_WHITELIST: Dict[str, List[Tuple[str, str]]] = {
     "芬超": [("Veikkausliiga", "Finland")],
     "芬甲": [("Ykkosliiga", "Finland")],
     "冰岛超": [("Urvalsdeild", "Iceland")],
+    "丹超": [("Superliga", "Denmark")],
+    "丹甲": [("1st Division", "Denmark")],
     # 美洲
     "美职": [("MLS", "USA")],
     "美乙": [("USL Championship", "USA")],
-    "美职联杯": [("U.S. Open Cup", "USA")],
+    "美职联杯": [("U.S. Open Cup", "USA"), ("Leagues Cup", "USA")],
+    "墨超": [("Liga MX", "Mexico")],
+    "墨甲": [("Liga de Expansion MX", "Mexico"), ("Liga Premier Serie A", "Mexico")],
+    "智利甲": [("Primera Division", "Chile")],
     "智利杯": [("Copa Chile", "Chile")],
+    "阿根廷杯": [("Copa Argentina", "Argentina")],
+    "阿甲": [("Primera Division", "Argentina"), ("Liga Profesional Argentina", "Argentina")],
+    "哥伦甲": [("Primera A", "Colombia")],
     "厄甲": [("Liga Pro", "Ecuador")],
     "巴甲": [("Serie A", "Brazil"), ("Brasileirão", "Brazil")],
     "巴乙": [("Serie B", "Brazil"), ("Serie B Superbet", "Brazil")],
+    "秘鲁甲": [("Liga 1", "Peru")],
+    "乌拉甲": [("Primera Division", "Uruguay")],
+    "巴拉甲": [("Primera Division", "Paraguay")],
     # 欧洲五大联赛
     "英超": [("Premier League", "England")],
     "英冠": [("Championship", "England")],
     "英甲": [("League One", "England")],
     "英乙": [("League Two", "England")],
-    "西甲": [("La Liga", "Spain")],
-    "西乙": [("Segunda Division", "Spain")],
+    "英联杯": [("Carabao Cup", "England"), ("EFL Cup", "England"), ("League Cup", "England")],
+    "足总杯": [("FA Cup", "England")],
+    "社区盾杯": [("Community Shield", "England")],
+    "西甲": [("La Liga", "Spain"), ("LaLiga", "Spain")],
+    "西乙": [("Segunda Division", "Spain"), ("LaLiga2", "Spain")],
+    "国王杯": [("Copa del Rey", "Spain")],
     "德甲": [("Bundesliga", "Germany")],
     "德乙": [("2. Bundesliga", "Germany")],
+    "德丙": [("3. Liga", "Germany")],
+    "德国杯": [("DFB Pokal", "Germany")],
     "意甲": [("Serie A", "Italy")],
     "意乙": [("Serie B", "Italy")],
+    "意大利杯": [("Coppa Italia", "Italy")],
     "法甲": [("Ligue 1", "France")],
     "法乙": [("Ligue 2", "France")],
+    "法国杯": [("Coupe de France", "France")],
+    "法联杯": [("Coupe de la Ligue", "France")],
     # 欧洲其他主流联赛
     "荷甲": [("Eredivisie", "Netherlands")],
-    "比甲": [("Pro League", "Belgium")],
-    "葡超": [("Primeira Liga", "Portugal")],
+    "荷乙": [("Eerste Divisie", "Netherlands")],
+    "荷兰杯": [("KNVB Beker", "Netherlands")],
+    "比甲": [("Pro League", "Belgium"), ("Jupiler Pro League", "Belgium")],
+    "比乙": [("Challenger Pro League", "Belgium")],
+    "葡超": [("Primeira Liga", "Portugal"), ("Liga Portugal", "Portugal")],
+    "葡甲": [("Liga Portugal 2", "Portugal"), ("Segunda Liga", "Portugal")],
     "苏超": [("Premiership", "Scotland")],
+    "苏冠": [("Championship", "Scotland")],
+    "苏联杯": [("League Cup", "Scotland")],
     "奥甲": [("Bundesliga", "Austria")],
+    "奥乙": [("2. Liga", "Austria")],
     "瑞士超": [("Super League", "Switzerland")],
-    "丹超": [("Superliga", "Denmark")],
-    "捷甲": [("Czech Liga", "Czech Republic")],
+    "瑞士甲": [("Challenge League", "Switzerland")],
+    "捷甲": [("Czech Liga", "Czech Republic"), ("Fortuna Liga", "Czech Republic")],
     "波超": [("Ekstraklasa", "Poland")],
     "希腊超": [("Super League", "Greece")],
-    "土超": [("Süper Lig", "Turkey")],
+    "土超": [("Süper Lig", "Turkey"), ("Super Lig", "Turkey")],
+    "土甲": [("1. Lig", "Turkey")],
     "俄超": [("Premier League", "Russia")],
     "乌超": [("Premier League", "Ukraine")],
+    "克甲": [("HNL", "Croatia")],
+    "塞超": [("Super Liga", "Serbia")],
+    "罗甲": [("Liga 1", "Romania")],
+    "匈甲": [("NB I", "Hungary")],
+    "以超": [("Premier League", "Israel"), ("Ligat ha'Al", "Israel")],
     # 欧洲杯赛
     "欧冠": [("Champions League", "Europe")],
     "欧联": [("Europa League", "Europe")],
     "欧协联": [("Conference League", "Europe")],
+    "欧超杯": [("Super Cup", "Europe")],
     # 亚洲其他
-    "沙特联": [("Pro League", "Saudi Arabia")],
+    "沙特联": [("Pro League", "Saudi Arabia"), ("Saudi Professional League", "Saudi Arabia")],
+    "沙特甲": [("Division 1", "Saudi Arabia")],
     "卡塔尔联": [("Stars League", "Qatar")],
     "阿联酋联": [("Pro League", "UAE")],
-    "日联杯": [("J-League Cup", "Japan")],
+    "伊朗超": [("Persian Gulf Pro League", "Iran")],
+    "泰超": [("Thai League", "Thailand"), ("Thai League 1", "Thailand")],
+    "泰甲": [("Thai League 2", "Thailand")],
+    "越南联": [("V.League 1", "Vietnam")],
+    "印尼甲": [("Liga 1", "Indonesia")],
     # 国际赛
     "世界杯": [
         ("World Championship", "World"),
@@ -115,6 +158,10 @@ LEAGUE_WHITELIST: Dict[str, List[Tuple[str, str]]] = {
     "美洲杯": [("Copa America", "World")],
     "亚洲杯": [("AFC Asian Cup", "Asia")],
     "非洲杯": [("Africa Cup of Nations", "Africa")],
+    "亚冠": [("AFC Champions League", "Asia"), ("AFC Champions League Elite", "Asia")],
+    "亚联杯": [("AFC Cup", "Asia")],
+    # 俱乐部友谊赛(夏季热身)
+    "俱乐部友谊赛": [("Club Friendly", "World")],
 }
 
 
@@ -265,6 +312,33 @@ def _learn_team_names_from_history(conn: sqlite3.Connection,
     return learned
 
 
+def _find_team_id(conn: sqlite3.Connection, name_en: str, name_cn: str = "") -> Optional[str]:
+    """Look up team_id from teams table by EN or CN name."""
+    if not name_en:
+        return None
+    # 1. Exact EN match
+    row = conn.execute("SELECT team_id FROM teams WHERE name_en = ? LIMIT 1", (name_en,)).fetchone()
+    if row:
+        return str(row[0])
+    # 2. CN match (if CN name provided and contains CJK)
+    if name_cn and any("一" <= c <= "鿿" for c in name_cn):
+        row = conn.execute("SELECT team_id FROM teams WHERE name_cn = ? LIMIT 1", (name_cn,)).fetchone()
+        if row:
+            return str(row[0])
+    # 3. Alias match
+    row = conn.execute(
+        "SELECT t.team_id FROM teams t JOIN team_aliases a ON t.team_id = a.team_id "
+        "WHERE a.alias_name = ? LIMIT 1", (name_en,)
+    ).fetchone()
+    if row:
+        return str(row[0])
+    # 4. Case-insensitive EN match
+    row = conn.execute("SELECT team_id FROM teams WHERE name_en = ? COLLATE NOCASE LIMIT 1", (name_en,)).fetchone()
+    if row:
+        return str(row[0])
+    return None
+
+
 def _to_beijing_time(start_at: str) -> str:
     """Convert ISO event_start_at to Beijing time string."""
     if not start_at:
@@ -295,6 +369,8 @@ def _derive_match_fields(event: Dict, conn: sqlite3.Connection) -> Optional[Dict
 
     home_cn = _cn_team_name(conn, home_en)
     away_cn = _cn_team_name(conn, away_en)
+    home_team_id = _find_team_id(conn, home_en, home_cn)
+    away_team_id = _find_team_id(conn, away_en, away_cn)
 
     beijing_time = _to_beijing_time(start_at)
     match_date = beijing_time[:10] if beijing_time else start_at[:10]
@@ -305,6 +381,8 @@ def _derive_match_fields(event: Dict, conn: sqlite3.Connection) -> Optional[Dict
 
     return {
         "lottery_match_id": lottery_match_id,
+        "home_team_id": home_team_id,
+        "away_team_id": away_team_id,
         "home_team_cn": home_cn,
         "away_team_cn": away_cn,
         "league_name_cn": league_cn,
@@ -346,15 +424,33 @@ def sync_oddsfe_matches_to_lottery(target_date: date, trigger_source: str = "odd
                 skipped += 1
                 continue
 
-            # Use oddsfe_event_id as the natural unique key, NOT lottery_match_id.
-            # This prevents cross-date duplicates: same event appearing in both
-            # 7/5 and 7/6 schedules (because beijing_time crosses midnight) would
-            # get different lottery_match_ids but the same oddsfe_event_id.
+            # --- 3-layer dedup (root-cause fix for cross-source duplicates) ---
+            # Layer 1: exact match by oddsfe_event_id (same event in different day schedules)
             existing = cursor.execute(
                 "SELECT lottery_match_id, match_date, home_team_cn FROM lottery_matches "
                 "WHERE oddsfe_event_id = ? LIMIT 1",
                 (fields["oddsfe_event_id"],)
             ).fetchone()
+
+            # Layer 2: if no eid match, try (home, away, date) — catches sporttery
+            # rows that were created WITHOUT oddsfe_event_id.  If found, bridge the eid.
+            if not existing and fields.get("home_team_cn") and fields.get("away_team_cn"):
+                existing = cursor.execute(
+                    "SELECT lottery_match_id, match_date, home_team_cn FROM lottery_matches "
+                    "WHERE home_team_cn = ? AND away_team_cn = ? AND match_date = ? "
+                    "AND (oddsfe_event_id IS NULL OR oddsfe_event_id = '') "
+                    "LIMIT 1",
+                    (fields["home_team_cn"], fields["away_team_cn"], fields["match_date"])
+                ).fetchone()
+                if existing:
+                    # Bridge oddsfe_event_id onto the sporttery-origin row
+                    cursor.execute(
+                        "UPDATE lottery_matches SET oddsfe_event_id = ?, updated_at = CURRENT_TIMESTAMP "
+                        "WHERE lottery_match_id = ?",
+                        (fields["oddsfe_event_id"], existing[0])
+                    )
+                    logger.info("桥接oddsfe_event_id=%s → lottery_match_id=%s (sporttery记录)",
+                                fields["oddsfe_event_id"], existing[0])
 
             if existing:
                 # Update existing row in place — keep its lottery_match_id to
@@ -389,22 +485,28 @@ def sync_oddsfe_matches_to_lottery(target_date: date, trigger_source: str = "odd
                     "match_date = ?, match_time = ?, beijing_time = ?, "
                     f"{home_clause}, {away_clause}, "
                     "league_name_cn = COALESCE(NULLIF(league_name_cn, ''), ?), "
+                    "home_team_id = COALESCE(?, home_team_id), "
+                    "away_team_id = COALESCE(?, away_team_id), "
                     "updated_at = CURRENT_TIMESTAMP "
                     "WHERE lottery_match_id = ?",
                     (fields["match_date"], fields["match_time"], fields["beijing_time"],
                      new_home, new_away, fields["league_name_cn"],
+                     fields.get("home_team_id"), fields.get("away_team_id"),
                      old_id)
                 )
                 updated += 1
             else:
                 cursor.execute(
                     """INSERT OR IGNORE INTO lottery_matches
-                       (lottery_match_id, home_team_cn, away_team_cn, league_name_cn,
+                       (lottery_match_id, home_team_id, away_team_id,
+                        home_team_cn, away_team_cn, league_name_cn,
                         match_num, match_date, match_time, beijing_time, sell_status,
                         play_types, handicap_line, oddsfe_event_id, created_at, updated_at)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
                     (
                         fields["lottery_match_id"],
+                        fields.get("home_team_id"),
+                        fields.get("away_team_id"),
                         fields["home_team_cn"],
                         fields["away_team_cn"],
                         fields["league_name_cn"],
@@ -427,6 +529,22 @@ def sync_oddsfe_matches_to_lottery(target_date: date, trigger_source: str = "odd
             skipped += 1
 
     conn.commit()
+
+    # --- Safety net: partial UNIQUE index on oddsfe_event_id ---
+    # Prevents any future code path from inserting a duplicate eid.
+    # Partial (WHERE NOT NULL) so rows without eid don't conflict.
+    try:
+        cursor.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_lottery_matches_oddsfe_eid "
+            "ON lottery_matches(oddsfe_event_id) WHERE oddsfe_event_id IS NOT NULL AND oddsfe_event_id != ''"
+        )
+        conn.commit()
+    except Exception as exc:
+        # Index creation may fail if duplicates already exist — log and continue
+        logger.warning("UNIQUE index creation failed (duplicates may exist): %s", exc)
+
+    # --- Post-sync dedup: merge any remaining duplicates by oddsfe_event_id ---
+    _dedup_by_oddsfe_event_id(conn)
 
     # Learn team name mappings from history + persist into teams.name_cn.
     # Wider window (30 days) than the sync window (3 days) so we can learn
@@ -463,12 +581,108 @@ def sync_oddsfe_matches_to_lottery(target_date: date, trigger_source: str = "odd
     return result
 
 
+def _dedup_by_oddsfe_event_id(conn: sqlite3.Connection) -> int:
+    """Merge duplicate lottery_matches rows that share the same oddsfe_event_id.
+
+    Root cause: sporttery inserts rows WITHOUT oddsfe_event_id, then oddsfe
+    inserts a second row WITH the eid.  The 3-layer dedup above prevents new
+    duplicates, but this cleans up any that already exist.
+
+    Strategy: keep the row with the most child data (predictions, bets, odds),
+    merge useful fields from the other row, then delete the loser.
+    """
+    dupes = conn.execute(
+        "SELECT oddsfe_event_id, COUNT(*) as cnt "
+        "FROM lottery_matches "
+        "WHERE oddsfe_event_id IS NOT NULL AND oddsfe_event_id != '' "
+        "GROUP BY oddsfe_event_id HAVING cnt > 1"
+    ).fetchall()
+    if not dupes:
+        return 0
+
+    merged = 0
+    for eid, cnt in dupes:
+        rows = conn.execute(
+            "SELECT lottery_match_id, home_team_cn, away_team_cn, league_name_cn, "
+            "match_date, match_time, beijing_time, sell_status, handicap_line "
+            "FROM lottery_matches WHERE oddsfe_event_id = ? ORDER BY created_at",
+            (eid,)
+        ).fetchall()
+
+        # Pick winner: the one with the most child rows
+        winner_id = None
+        loser_ids = []
+        best_child_count = -1
+        for r in rows:
+            mid = r[0]
+            child_count = 0
+            for table in ("lottery_predictions", "lottery_results", "bet_records", "lottery_odds"):
+                try:
+                    cnt_row = conn.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE lottery_match_id = ?", (mid,)
+                    ).fetchone()
+                    child_count += (cnt_row[0] if cnt_row else 0)
+                except Exception:
+                    pass
+            if child_count > best_child_count:
+                if winner_id:
+                    loser_ids.append(winner_id)
+                winner_id = mid
+                best_child_count = child_count
+            else:
+                loser_ids.append(mid)
+
+        if not winner_id or not loser_ids:
+            continue
+
+        # Re-point child rows from losers to winner
+        for loser_id in loser_ids:
+            for table in ("lottery_predictions", "lottery_results", "bet_records", "lottery_odds"):
+                try:
+                    conn.execute(
+                        f"UPDATE {table} SET lottery_match_id = ? WHERE lottery_match_id = ?",
+                        (winner_id, loser_id)
+                    )
+                except Exception:
+                    pass
+            conn.execute("DELETE FROM lottery_matches WHERE lottery_match_id = ?", (loser_id,))
+            logger.info("dedup: merged %s → %s (eid=%s, children=%d)",
+                        loser_id, winner_id, eid, best_child_count)
+            merged += 1
+
+    conn.commit()
+    if merged:
+        logger.info("dedup: cleaned %d duplicate pairs", merged)
+    return merged
+
+
 def main() -> None:
     from datetime import date as _date
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Sync oddsfe matches to lottery_matches")
+    parser.add_argument("--history", type=int, default=0,
+                        help="Backfill N days of past matches (e.g. --history 30)")
+    parser.add_argument("--future", type=int, default=3,
+                        help="Sync N days of future matches (default: 3)")
+    args = parser.parse_args()
 
     today = _date.today()
     total_inserted = 0
-    for offset in (0, 1, 2):
+
+    # Past matches (for training/analysis)
+    if args.history > 0:
+        logger.info("历史回填: %d天", args.history)
+        for offset in range(-args.history, 0):
+            target = today + timedelta(days=offset)
+            try:
+                result = sync_oddsfe_matches_to_lottery(target)
+                total_inserted += result["inserted"]
+            except Exception as exc:
+                logger.error("history sync failed for %s: %s", target, exc)
+
+    # Future matches (for predictions)
+    for offset in range(0, args.future):
         target = today + timedelta(days=offset)
         try:
             result = sync_oddsfe_matches_to_lottery(target)

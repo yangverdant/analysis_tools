@@ -228,6 +228,24 @@ _EN_CN_DIRECT = {
     'Henan Songshan Longmen': '河南嵩山龙门', 'Qingdao West Coast': '青岛西海岸',
     'Shandong Taishan': '山东泰山', 'Wuhan Three Towns': '武汉三镇',
     'Yunnan Yukun': '云南玉昆',
+    # 中甲
+    'Yanbian Longding': '延边龙鼎', 'Suzhou Dongwu': '苏州东吴',
+    'Shaanxi Union': '陕西联合', 'Wuxi Wugou': '无锡吴钩',
+    'Guangdong GZ-Power': '广东广州豹', 'Shijiazhuang Gongfu': '石家庄功夫',
+    'Dalian Kewei': '大连鲲城', 'Dingnan Ganlian': '定南赣联',
+    'Ganzhou Ruishi': '赣州瑞狮', 'Guangdong Mingtu': '广东铭途',
+    'Guangzhou Dandelion': '广州蒲公英', 'Hubei Istar': '湖北Istar',
+    'Lanzhou Longyuan': '兰州陇源', 'Liaoning Tieren': '辽宁铁人',
+    'Nantong Haimen': '南通海门', 'Nantong Zhiyun': '南通支云',
+    # 中超补充
+    'Beijing Technology': '北京理工', 'Shanghai Port': '上海海港',
+    'Shanghai Port B': '上海海港B队', 'Tianjin Jinmen Tiger': '天津津门虎',
+    # 巴西补充
+    'CRB': '阿拉戈亚诺', 'Novorizontino': '诺瓦里桑蒂诺',
+    # 智利补充
+    'Deportes Temuco': '特木科体育', 'Magallanes': '麦哲伦',
+    # 芬兰补充
+    'PK-35': 'PK-35万塔',
     # 其他
     'TNS': '新圣徒', 'Decic': '德契奇',
 }

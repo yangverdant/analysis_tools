@@ -4,14 +4,26 @@ const API_BASE = '/api/v1'
 // API请求封装
 async function fetchAPI(endpoint, options = {}) {
   const url = `${API_BASE}${endpoint}`
-  const response = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers
-    },
-    ...options
-  })
-  return response.json()
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30000)
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'Content-Type': 'application/json',
+        ...options.headers
+      },
+      signal: controller.signal,
+      ...options
+    })
+    clearTimeout(timeout)
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status} ${response.statusText}`)
+    }
+    return response.json()
+  } catch (e) {
+    clearTimeout(timeout)
+    throw e
+  }
 }
 
 function buildQuery(params = {}) {

@@ -672,8 +672,14 @@ def backtest(conn, factor, old_weight, new_weight, scene, p_type, days,
                 adjusted_prob = 0.5 + (pred_prob - 0.5) * max(weight_ratio, 0.3)
             adjusted_prob = max(0.1, min(0.9, adjusted_prob))
 
-            # 重新判断: 如果adjusted_prob > 阈值则保持原预测
-            is_correct_new = (predicted == actual)
+            # 重新判断: adjusted_prob变化是否翻转预测方向
+            # 如果权重增大→概率更极端→原预测更可能正确(如果已正确)
+            # 如果权重减小→概率更均匀→原预测可能翻转(如果接近阈值)
+            if weight_ratio < 1 and pred_prob < 0.5 + (1 - pred_prob) * weight_ratio:
+                # 权重减小使预测不再显著, 方向可能翻转 → 判为错误
+                is_correct_new = False
+            else:
+                is_correct_new = (predicted == actual)
             new_correct += int(is_correct_new)
 
             # 重新计算Brier
@@ -700,15 +706,12 @@ def backtest(conn, factor, old_weight, new_weight, scene, p_type, days,
 
 
 def _estimate_brier(pred_prob, predicted, actual) -> float:
-    """估计Brier score — 基于预测概率和实际结果"""
-    # 简化: 3类Brier score估计
-    # 如果预测正确 → pred_prob高 → Brier低
-    # 如果预测错误 → pred_prob低 → Brier高
+    """估计Brier score — 基于预测概率和实际结果(3类)"""
     if predicted == actual:
-        # 正确: Brier ≈ (1-p)^2 + 2*(p/2)^2 ≈ 1 - 1.5p + 0.75p^2 (简化)
-        return round((1 - pred_prob) ** 2 + 2 * (pred_prob / 3) ** 2, 4)
+        # 正确: Brier = (1-p)^2 + 2*(p/2)^2
+        return round((1 - pred_prob) ** 2 + 2 * (pred_prob / 2) ** 2, 4)
     else:
-        # 错误: Brier ≈ p^2 + (1-p)/2)^2 + ((1-p)/2)^2
+        # 错误: Brier = p^2 + ((1-p)/2)^2 + ((1-p)/2)^2
         return round(pred_prob ** 2 + 2 * ((1 - pred_prob) / 2) ** 2, 4)
 
 

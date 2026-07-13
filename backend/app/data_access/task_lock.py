@@ -118,6 +118,10 @@ def exclusive_task_lock(
         yield TaskLockResult(True, str(path), "", payload)
     finally:
         try:
-            path.unlink()
-        except FileNotFoundError:
+            # Only delete if the lock file still belongs to us (prevents deleting another process's lock)
+            current_content = path.read_text(encoding="utf-8")
+            current_data = json.loads(current_content)
+            if current_data.get("pid") == payload["pid"] and current_data.get("created_at") == payload["created_at"]:
+                path.unlink()
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
             pass

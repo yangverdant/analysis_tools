@@ -35,6 +35,10 @@
 | 主DB | `/opt/football_tools/data/football_v2.db` | ~3.5 GB |
 | oddsfe DB | `/opt/football_tools/fetchers/odds_feed_api/oddsfe_merged.db` | ~35 MB |
 
+**自动备份** (每天01:00，保留3天):
+- Timer: `football-db-backup.timer` → `football-db-backup.service`
+- 备份位置: `/opt/football_tools_backups/runtime/football_v2_backup_YYYYMMDD.db`
+
 **手动备份**:
 ```bash
 sqlite3 /opt/football_tools/data/football_v2.db ".backup '/opt/football_tools/backups/football_v2_$(date +%Y%m%d_%H%M%S).db'"
@@ -54,6 +58,7 @@ scp -i $HOME\.ssh\football_server ubuntu@1.117.70.20:/opt/football_tools/data/fo
 | `football-daily-morning.timer` | 周期 | ubuntu | 每天06:30 | 感知→学习 |
 | `football-daily-push.timer` | 周期 | ubuntu | 每天09:00 | TOP3推送+Agent日报+止损 |
 | `football-learning-refresh.timer` | 周期 | ubuntu | 每天02:45 | 归因→学习→重分析 |
+| `football-db-backup.timer` | 周期 | ubuntu | 每天01:00 | DB自动备份(保留3天) |
 
 **常用命令**:
 ```bash

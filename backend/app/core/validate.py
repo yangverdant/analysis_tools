@@ -16,12 +16,23 @@ import sqlite3
 import time
 import random
 import requests
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from .time_utils import today_beijing, yesterday_beijing
 
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _db_conn(db_path: str, timeout: int = 10):
+    """SQLite连接context manager, 保证finally关闭"""
+    conn = sqlite3.connect(db_path, timeout=timeout)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _table_columns(conn, table_name: str) -> set:
@@ -390,7 +401,8 @@ def validate(state, db_path: str, agent=None) -> dict:
         results['reanalysis_change_settlement'] = {"error": str(e)}
 
     # Step 3: 翻车归因(规则引擎+Agent增强)
-    results['attribution'] = _attribute_failures(db_path, match_dates, agent=agent)
+    _skip_agent = os.environ.get('FOOTBALL_SKIP_AGENT_ATTRIBUTION', '0') == '1'
+    results['attribution'] = _attribute_failures(db_path, match_dates, agent=agent, skip_agent=_skip_agent)
 
     # Step 4: 结算bet_records
     results['settlement'] = _settle_bets(db_path)
@@ -413,19 +425,18 @@ def _find_unvalidated_dates(db_path: str, default_dates: list) -> list:
     """查找有结果但未验证的日期，加入回填范围"""
     dates = list(default_dates)
     try:
-        conn = sqlite3.connect(db_path, timeout=10)
-        rows = conn.execute("""
-            SELECT DISTINCT lm.match_date
-            FROM lottery_matches lm
-            JOIN lottery_results lr ON lm.lottery_match_id = lr.lottery_match_id
-            LEFT JOIN lottery_validation lv ON lm.lottery_match_id = lv.lottery_match_id
-            WHERE lv.lottery_match_id IS NULL
-            AND lm.match_date < date('now')
-        """).fetchall()
-        for row in rows:
-            if row[0] not in dates:
-                dates.append(row[0])
-        conn.close()
+        with _db_conn(db_path) as conn:
+            rows = conn.execute("""
+                SELECT DISTINCT lm.match_date
+                FROM lottery_matches lm
+                JOIN lottery_results lr ON lm.lottery_match_id = lr.lottery_match_id
+                LEFT JOIN lottery_validation lv ON lm.lottery_match_id = lv.lottery_match_id
+                WHERE lv.lottery_match_id IS NULL
+                AND lm.match_date < date('now')
+            """).fetchall()
+            for row in rows:
+                if row[0] not in dates:
+                    dates.append(row[0])
         if len(dates) > len(default_dates):
             logger.info('历史回填: 新增%d个日期', len(dates) - len(default_dates))
     except Exception as e:
@@ -513,135 +524,134 @@ def _sync_results_oddsfe(db_path: str, match_date: str) -> dict:
     # 匹配体彩比赛 — 同时查match_date和beijing_time日期
     # match_date='2026-06-15'但beijing_time='2026-06-16 09:00'的比赛
     # 在查'2026-06-16'时也要能找到
-    conn = sqlite3.connect(db_path, timeout=10)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT lottery_match_id, home_team_cn, away_team_cn, oddsfe_event_id, handicap_line, beijing_time "
-        "FROM lottery_matches "
-        "WHERE match_date = ? OR beijing_time LIKE ?",
-        (match_date, f'{match_date}%')
-    )
-    lottery_matches = [dict(r) for r in cursor.fetchall()]
+    with _db_conn(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT lottery_match_id, home_team_cn, away_team_cn, oddsfe_event_id, handicap_line, beijing_time "
+            "FROM lottery_matches "
+            "WHERE match_date = ? OR beijing_time LIKE ?",
+            (match_date, f'{match_date}%')
+        )
+        lottery_matches = [dict(r) for r in cursor.fetchall()]
 
-    saved = 0
-    session = requests.Session()
-    session.trust_env = False
+        saved = 0
+        session = requests.Session()
+        session.trust_env = False
 
-    for lm in lottery_matches:
-        # 检查已有结果 — 如果有则用oddsfe比分交叉校验
-        existing = conn.execute(
-            "SELECT home_goals_ft, away_goals_ft FROM lottery_results WHERE lottery_match_id = ? AND bf_result IS NOT NULL",
-            (lm['lottery_match_id'],)
-        ).fetchone()
-        if existing:
-            # 交叉校验: 如果oddsfe比分与DB不一致，用oddsfe覆盖
-            # 先找到匹配的oddsfe event
-            matched_for_check = None
+        for lm in lottery_matches:
+            # 检查已有结果 — 如果有则用oddsfe比分交叉校验
+            existing = conn.execute(
+                "SELECT home_goals_ft, away_goals_ft FROM lottery_results WHERE lottery_match_id = ? AND bf_result IS NOT NULL",
+                (lm['lottery_match_id'],)
+            ).fetchone()
+            if existing:
+                # 交叉校验: 如果oddsfe比分与DB不一致，用oddsfe覆盖
+                # 先找到匹配的oddsfe event
+                matched_for_check = None
+                if lm.get('oddsfe_event_id'):
+                    for ev in finished:
+                        if str(ev.get('event_id')) == str(lm['oddsfe_event_id']):
+                            matched_for_check = ev
+                            break
+                if not matched_for_check:
+                    home_en = cn_to_en.get(lm['home_team_cn']) or lm.get('home_team_cn', '')
+                    away_en = cn_to_en.get(lm['away_team_cn']) or lm.get('away_team_cn', '')
+                    h_norm = _norm_team(home_en)
+                    a_norm = _norm_team(away_en)
+                    matched_for_check = oddsfe_by_name.get((h_norm, a_norm))
+                if matched_for_check:
+                    oddsfe_h = _safe_int(matched_for_check.get('event_score_home'))
+                    oddsfe_a = _safe_int(matched_for_check.get('event_score_away'))
+                    db_h = existing[0]
+                    db_a = existing[1]
+                    if oddsfe_h is not None and oddsfe_a is not None and (oddsfe_h != db_h or oddsfe_a != db_a):
+                        logger.warning('比分校验不一致 %s: DB=%d:%d, oddsfe=%d:%d, 用oddsfe覆盖',
+                                       lm['lottery_match_id'], db_h, db_a, oddsfe_h, oddsfe_a)
+                        # 删除旧结果，让下面的逻辑重新写入
+                        conn.execute("DELETE FROM lottery_results WHERE lottery_match_id = ?", (lm['lottery_match_id'],))
+                        # 不continue，让后面的逻辑重新写入
+                    else:
+                        continue  # 比分一致，跳过
+                else:
+                    continue  # 找不到oddsfe匹配，保留现有结果
+
+            # 优先通过oddsfe_event_id匹配
+            matched_ev = None
             if lm.get('oddsfe_event_id'):
                 for ev in finished:
                     if str(ev.get('event_id')) == str(lm['oddsfe_event_id']):
-                        matched_for_check = ev
+                        matched_ev = ev
                         break
-            if not matched_for_check:
+
+            # 其次通过队名匹配
+            if not matched_ev:
                 home_en = cn_to_en.get(lm['home_team_cn']) or lm.get('home_team_cn', '')
                 away_en = cn_to_en.get(lm['away_team_cn']) or lm.get('away_team_cn', '')
                 h_norm = _norm_team(home_en)
                 a_norm = _norm_team(away_en)
-                matched_for_check = oddsfe_by_name.get((h_norm, a_norm))
-            if matched_for_check:
-                oddsfe_h = _safe_int(matched_for_check.get('event_score_home'))
-                oddsfe_a = _safe_int(matched_for_check.get('event_score_away'))
-                db_h = existing[0]
-                db_a = existing[1]
-                if oddsfe_h is not None and oddsfe_a is not None and (oddsfe_h != db_h or oddsfe_a != db_a):
-                    logger.warning('比分校验不一致 %s: DB=%d:%d, oddsfe=%d:%d, 用oddsfe覆盖',
-                                   lm['lottery_match_id'], db_h, db_a, oddsfe_h, oddsfe_a)
-                    # 删除旧结果，让下面的逻辑重新写入
-                    conn.execute("DELETE FROM lottery_results WHERE lottery_match_id = ?", (lm['lottery_match_id'],))
-                    # 不continue，让后面的逻辑重新写入
-                else:
-                    continue  # 比分一致，跳过
-            else:
-                continue  # 找不到oddsfe匹配，保留现有结果
+                matched_ev = oddsfe_by_name.get((h_norm, a_norm))
 
-        # 优先通过oddsfe_event_id匹配
-        matched_ev = None
-        if lm.get('oddsfe_event_id'):
-            for ev in finished:
-                if str(ev.get('event_id')) == str(lm['oddsfe_event_id']):
-                    matched_ev = ev
-                    break
+            if not matched_ev:
+                continue
 
-        # 其次通过队名匹配
-        if not matched_ev:
-            home_en = cn_to_en.get(lm['home_team_cn']) or lm.get('home_team_cn', '')
-            away_en = cn_to_en.get(lm['away_team_cn']) or lm.get('away_team_cn', '')
-            h_norm = _norm_team(home_en)
-            a_norm = _norm_team(away_en)
-            matched_ev = oddsfe_by_name.get((h_norm, a_norm))
+            home_goals = _safe_int(matched_ev.get('event_score_home'))
+            away_goals = _safe_int(matched_ev.get('event_score_away'))
+            if home_goals is None or away_goals is None:
+                continue
 
-        if not matched_ev:
-            continue
+            # 调event API拿score_details(半场/加时/点球)
+            score_details = _oddsfe_fetch_score_details(session, matched_ev.get('event_id', ''))
 
-        home_goals = _safe_int(matched_ev.get('event_score_home'))
-        away_goals = _safe_int(matched_ev.get('event_score_away'))
-        if home_goals is None or away_goals is None:
-            continue
+            # 解析score_details → 半场比分
+            ht_h, ht_a = _parse_score_details(score_details)
 
-        # 调event API拿score_details(半场/加时/点球)
-        score_details = _oddsfe_fetch_score_details(session, matched_ev.get('event_id', ''))
+            # 交叉验证: score_details全场比分应与event_score一致
+            if score_details:
+                sd_ft_h, sd_ft_a = _parse_fulltime_from_score_details(score_details)
+                if sd_ft_h is not None and sd_ft_a is not None:
+                    if sd_ft_h != home_goals or sd_ft_a != away_goals:
+                        logger.warning('赛果不一致 %s: event_score=%d:%d, score_details全场=%d:%d, 使用score_details',
+                                       lm['lottery_match_id'], home_goals, away_goals, sd_ft_h, sd_ft_a)
+                        home_goals = sd_ft_h
+                        away_goals = sd_ft_a
 
-        # 解析score_details → 半场比分
-        ht_h, ht_a = _parse_score_details(score_details)
+            # 半场比分合理性检查: 半场进球不应超过全场
+            if ht_h is not None and ht_a is not None:
+                if ht_h > home_goals or ht_a > away_goals:
+                    logger.warning('半场比分异常 %s: HT %d:%d > FT %d:%d, 置空半场',
+                                   lm['lottery_match_id'], ht_h, ht_a, home_goals, away_goals)
+                    ht_h, ht_a = None, None
 
-        # 交叉验证: score_details全场比分应与event_score一致
-        if score_details:
-            sd_ft_h, sd_ft_a = _parse_fulltime_from_score_details(score_details)
-            if sd_ft_h is not None and sd_ft_a is not None:
-                if sd_ft_h != home_goals or sd_ft_a != away_goals:
-                    logger.warning('赛果不一致 %s: event_score=%d:%d, score_details全场=%d:%d, 使用score_details',
-                                   lm['lottery_match_id'], home_goals, away_goals, sd_ft_h, sd_ft_a)
-                    home_goals = sd_ft_h
-                    away_goals = sd_ft_a
+            # 推导全部玩法结果 — 用goal_line算RQSPF(handicap_line方向不可靠)
+            effective_hcp = _get_effective_handicap(conn, lm['lottery_match_id'], lm.get('handicap_line', 0))
+            results = _derive_all_play_types(home_goals, away_goals, ht_h, ht_a, effective_hcp,
+                                              db_path=db_path, lottery_match_id=lm['lottery_match_id'])
 
-        # 半场比分合理性检查: 半场进球不应超过全场
-        if ht_h is not None and ht_a is not None:
-            if ht_h > home_goals or ht_a > away_goals:
-                logger.warning('半场比分异常 %s: HT %d:%d > FT %d:%d, 置空半场',
-                               lm['lottery_match_id'], ht_h, ht_a, home_goals, away_goals)
-                ht_h, ht_a = None, None
+            try:
+                conn.execute("""
+                    INSERT OR REPLACE INTO lottery_results
+                    (lottery_match_id, home_goals_ft, away_goals_ft,
+                     home_goals_ht, away_goals_ht,
+                     spf_result, bf_result, bqc_result, rqspf_result, ou_result)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    lm['lottery_match_id'],
+                    results['home_goals_ft'], results['away_goals_ft'],
+                    results['home_goals_ht'], results['away_goals_ht'],
+                    results['spf_result'], results['bf_result'],
+                    results['bqc_result'], results['rqspf_result'],
+                    results.get('ou_result'),
+                ))
+                saved += 1
 
-        # 推导全部玩法结果 — 用goal_line算RQSPF(handicap_line方向不可靠)
-        effective_hcp = _get_effective_handicap(conn, lm['lottery_match_id'], lm.get('handicap_line', 0))
-        results = _derive_all_play_types(home_goals, away_goals, ht_h, ht_a, effective_hcp,
-                                          db_path=db_path, lottery_match_id=lm['lottery_match_id'])
+                # 同时更新lottery_matches: beijing_time + oddsfe_event_id
+                _update_match_meta(conn, lm['lottery_match_id'], matched_ev)
+            except Exception as e:
+                logger.debug('结果写入失败 %s: %s', lm['lottery_match_id'], e)
 
-        try:
-            conn.execute("""
-                INSERT OR REPLACE INTO lottery_results
-                (lottery_match_id, home_goals_ft, away_goals_ft,
-                 home_goals_ht, away_goals_ht,
-                 spf_result, bf_result, bqc_result, rqspf_result, ou_result)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                lm['lottery_match_id'],
-                results['home_goals_ft'], results['away_goals_ft'],
-                results['home_goals_ht'], results['away_goals_ht'],
-                results['spf_result'], results['bf_result'],
-                results['bqc_result'], results['rqspf_result'],
-                results.get('ou_result'),
-            ))
-            saved += 1
-
-            # 同时更新lottery_matches: beijing_time + oddsfe_event_id
-            _update_match_meta(conn, lm['lottery_match_id'], matched_ev)
-        except Exception as e:
-            logger.debug('结果写入失败 %s: %s', lm['lottery_match_id'], e)
-
-    conn.commit()
-    conn.close()
-    return {'success': saved > 0, 'saved': saved, 'date': match_date, 'source': 'oddsfe'}
+        conn.commit()
+        return {'success': saved > 0, 'saved': saved, 'date': match_date, 'source': 'oddsfe'}
 
 
 # ==================== oddsfe API调用(不依赖fetchers包) ====================
@@ -773,16 +783,15 @@ def _oddsfe_fetch_score_details(session, event_id, max_retries=2):
 def _parse_score_details(score_details: str):
     """解析score_details → 半场比分(home_ht, away_ht)
 
-    格式变体:
+    格式变体(各段是各自进球数，不是累积):
     - "2:1"                    → 1段: 只有全场(无法区分半场)
-    - "0:1, 2:1"              → 2段: 半场, 全场
-    - "1:0, 1:2, 8:7"         → 3段: 半场, 全场(常规), 加时后
-    - "0:0, 1:1, 0:0, 5:6"    → 4段: 半场, 全场(常规), 加时, 点球
+    - "0:1, 2:1"              → 2段: 上半场0:1, 下半场2:1
+    - "1:0, 2:1, 5:4"         → 3段: 上半场1:0, 下半场2:1, 点球5:4
+    - "0:0, 1:1, 0:0, 5:6"    → 4段: 上半场0:0, 下半场1:1, 加时0:0, 点球5:6
     - "(4:1, 3:3)"            → 括号形式，去掉括号后同上
 
     我们需要的:
-    - 半场比分 = 第1段
-    - 全场比分 = 最后一段(或第2段如果有2段+)
+    - 半场比分 = 第1段(上半场)
     """
     if not score_details:
         return None, None
@@ -810,10 +819,12 @@ def _parse_score_details(score_details: str):
 def _parse_fulltime_from_score_details(score_details: str):
     """从score_details提取全场比分(用于交叉验证event_score)
 
-    oddsfe score_details格式是每半场各自进球:
+    oddsfe score_details格式是各半场各自进球:
     - "1:2, 0:2"              → 上半场1:2, 下半场0:2 → 全场=1+0:2+2=1:4
     - "1:0, 2:1"              → 上半场1:0, 下半场2:1 → 全场=1+2:0+1=3:1
-    全场 = 各半场进球之和
+    - "1:0, 2:1, 5:4"         → 上半场1:0, 下半场2:1, 点球5:4 → 常规=3:1
+    - "1:0, 2:1, 0:0, 5:4"    → 上半场1:0, 下半场2:1, 加时0:0, 点球5:4 → 常规=3:1
+    全场(常规90分钟) = 上半场+下半场进球之和
     """
     if not score_details:
         return None, None
@@ -839,9 +850,10 @@ def _parse_fulltime_from_score_details(score_details: str):
     if len(parsed) < 2:
         return None, None
 
-    # 全场 = 所有半场进球之和
-    total_h = sum(p[0] for p in parsed)
-    total_a = sum(p[1] for p in parsed)
+    # 常规时间全场 = 上半场(parts[0]) + 下半场(parts[1]) 进球之和
+    # 3段: 上半场+下半场+点球, 4段: 上半场+下半场+加时+点球
+    total_h = parsed[0][0] + parsed[1][0]
+    total_a = parsed[0][1] + parsed[1][1]
     return total_h, total_a
 
 
@@ -930,39 +942,38 @@ def _derive_all_play_types(home_ft, away_ft, home_ht, away_ht,
     # Try to get O/U line from report
     if db_path and lottery_match_id:
         try:
-            conn = sqlite3.connect(db_path, timeout=10)
-            c = conn.cursor()
-            # Method 1: From prediction report
-            active_filter = _active_report_filter(conn)
-            c.execute(f"""
-                SELECT report_data FROM lottery_analysis_reports
-                WHERE lottery_match_id = ? AND report_type = 'prediction'
-                {active_filter}
-                ORDER BY datetime(created_at) DESC, rowid DESC
-                LIMIT 1
-            """, (lottery_match_id,))
-            row = c.fetchone()
-            if row:
-                report = json.loads(row[0])
-                pp = report.get('play_predictions', {})
-                ou = pp.get('ou', {})
-                if ou:
-                    ou_line = ou.get('best_line', ou.get('line'))
-            # Method 2: From lottery_odds ttg
-            if ou_line is None:
-                c.execute("""
-                    SELECT odds_data FROM lottery_odds
-                    WHERE lottery_match_id = ? AND play_type = 'ttg'
+            with _db_conn(db_path) as conn:
+                c = conn.cursor()
+                # Method 1: From prediction report
+                active_filter = _active_report_filter(conn)
+                c.execute(f"""
+                    SELECT report_data FROM lottery_analysis_reports
+                    WHERE lottery_match_id = ? AND report_type = 'prediction'
+                    {active_filter}
+                    ORDER BY datetime(created_at) DESC, rowid DESC
                     LIMIT 1
                 """, (lottery_match_id,))
                 row = c.fetchone()
                 if row:
-                    odds = json.loads(row[0]) if isinstance(row[0], str) else row[0]
-                    for key in odds:
-                        if 'over' in str(key).lower() and '2.5' in str(key):
-                            ou_line = 2.5
-                            break
-            conn.close()
+                    report = json.loads(row[0])
+                    pp = report.get('play_predictions', {})
+                    ou = pp.get('ou', {})
+                    if ou:
+                        ou_line = ou.get('best_line', ou.get('line'))
+                # Method 2: From lottery_odds ttg
+                if ou_line is None:
+                    c.execute("""
+                        SELECT odds_data FROM lottery_odds
+                        WHERE lottery_match_id = ? AND play_type = 'ttg'
+                        LIMIT 1
+                    """, (lottery_match_id,))
+                    row = c.fetchone()
+                    if row:
+                        odds = json.loads(row[0]) if isinstance(row[0], str) else row[0]
+                        for key in odds:
+                            if 'over' in str(key).lower() and '2.5' in str(key):
+                                ou_line = 2.5
+                                break
         except Exception:
             pass
 
@@ -1552,11 +1563,15 @@ def _validate_predictions(db_path: str, match_dates: list) -> dict:
                 logger.debug(f'验证失败 {row["lottery_match_id"]}: {e}')
 
         conn.commit()
-        conn.close()
 
     except Exception as e:
         logger.error(f'预测验证失败: {e}')
         return {'validated': validated, 'correct': correct_count, 'error': str(e)}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     accuracy = round(correct_count / validated * 100, 1) if validated > 0 else 0
     logger.info(f'验证完成: {validated}场, {correct_count}场正确, 准确率{accuracy}%')
@@ -1597,7 +1612,6 @@ def _backfill_results_from_oddsfe(db_path: str) -> dict:
         missing = [dict(r) for r in cursor.fetchall()]
 
         if not missing:
-            conn.close()
             return {'status': 'ok', 'backfilled': 0}
 
         # 按日期分组 — 同时考虑match_date和beijing_time日期
@@ -1743,7 +1757,6 @@ def _backfill_results_from_oddsfe(db_path: str) -> dict:
                 time.sleep(0.1)
 
         conn.commit()
-        conn.close()
 
         if backfilled > 0:
             logger.info('oddsfe结果回填: %d场', backfilled)
@@ -1753,6 +1766,11 @@ def _backfill_results_from_oddsfe(db_path: str) -> dict:
     except Exception as e:
         logger.error('oddsfe结果回填失败: %s', e)
         return {'status': 'error', 'error': str(e)}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _compute_tier_from_validation(confidence, probabilities, row, conn, play_type) -> str:
@@ -2447,6 +2465,7 @@ def _attribute_failures(db_path: str, match_dates: list, agent=None, skip_agent:
             failures.extend(dict(row) for row in cursor.fetchall())
 
         # 回填: attribution IS NULL 的历史错误
+        # 规则引擎归因极快(<1ms/条), 500条也能秒完; Agent归因有10分钟总时限保护
         cursor.execute("""
             SELECT lv.*, lm.home_team_cn, lm.away_team_cn
             FROM lottery_validation lv
@@ -2473,8 +2492,15 @@ def _attribute_failures(db_path: str, match_dates: list, agent=None, skip_agent:
             agent = None
 
         consecutive_agent_failures = 0  # 连续失败计数, 达3次自动禁用Agent
+        attribution_deadline = time.time() + 600  # 归因总时限10分钟
 
         for failure in failures:
+            # 归因总时限检查
+            if agent and time.time() > attribution_deadline:
+                logger.warning('归因总时限10分钟已到, 剩余%d条跳过Agent归因',
+                               len(failures) - attributed)
+                agent = None  # 降级为纯规则引擎
+
             try:
                 # Step 1: 规则引擎(始终执行，作为基线)
                 attribution = _determine_attribution(conn, failure)
@@ -2550,10 +2576,14 @@ def _attribute_failures(db_path: str, match_dates: list, agent=None, skip_agent:
                 logger.warning(f'归因失败 {failure.get("lottery_match_id")} {failure.get("play_type")}: {e}')
 
         conn.commit()
-        conn.close()
 
     except Exception as e:
         logger.warning('归因整体失败: %s', e)
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     return {'attributed': attributed}
 
@@ -3221,7 +3251,6 @@ def _settle_bets(db_path: str) -> dict:
             settled += 1
 
         conn.commit()
-        conn.close()
 
         if settled > 0:
             logger.info('投注结算: %d笔, %d胜, 盈亏%.0f元', settled, wins, total_profit)
@@ -3229,6 +3258,11 @@ def _settle_bets(db_path: str) -> dict:
     except Exception as e:
         logger.error('投注结算失败: %s', e)
         return {'settled': 0}
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     return {'settled': settled, 'wins': wins, 'profit': round(total_profit, 2)}
 

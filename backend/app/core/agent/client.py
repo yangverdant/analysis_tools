@@ -36,8 +36,12 @@ def _read_db(sql: str, db_path: str = None) -> str:
     """执行只读SQL查询，返回JSON结果"""
     db_path = db_path or str(DB_PATH)
     try:
-        if not sql.strip().upper().startswith("SELECT"):
+        sql_upper = sql.strip().upper()
+        if not sql_upper.startswith("SELECT"):
             return json.dumps({"error": "Only SELECT queries allowed"})
+        # Block dangerous patterns: UNION, subqueries with writes, semicolons
+        if ";" in sql or "UNION" in sql_upper or "ATTACH" in sql_upper:
+            return json.dumps({"error": "Query contains disallowed keyword"})
         conn = sqlite3.connect(db_path, timeout=10)
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -92,7 +96,8 @@ def _load_config():
         with open(config_dir / "api_keys.yaml", encoding="utf-8") as f:
             keys = yaml.safe_load(f) or {}
         return cfg, keys
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Agent config load failed: {e}")
         return {}, {}
 
 
@@ -215,8 +220,11 @@ class AnalystAgent:
             # 处理tool_use
             final_text = ""
             messages = [{"role": "user", "content": prompt}]
+            max_iterations = 10
+            iteration = 0
 
-            while True:
+            while iteration < max_iterations:
+                iteration += 1
                 has_tool_use = False
                 for block in response.content:
                     if block.type == "tool_use":
@@ -244,6 +252,9 @@ class AnalystAgent:
 
                 if not has_tool_use:
                     break
+
+            if iteration >= max_iterations:
+                logger.warning(f"Anthropic tool_use loop hit max_iterations={max_iterations}")
 
             return self._parse_json(final_text)
 
@@ -277,8 +288,11 @@ class AnalystAgent:
                 {"role": "system", "content": system_text},
                 {"role": "user", "content": prompt},
             ]
+            max_iterations = 10
+            iteration = 0
 
-            while True:
+            while iteration < max_iterations:
+                iteration += 1
                 msg = response.choices[0].message
                 if not msg.tool_calls:
                     break
@@ -300,6 +314,9 @@ class AnalystAgent:
                     tools=tools,
                     messages=messages,
                 )
+
+            if iteration >= max_iterations:
+                logger.warning(f"OpenAI tool_calls loop hit max_iterations={max_iterations}")
 
             text = response.choices[0].message.content or ""
             return self._parse_json(text)
@@ -522,8 +539,10 @@ ROI概况: {json.dumps(roi_summary or {}, ensure_ascii=False)}
             'profit': b.get('profit', 0),
         } for b in (recent_bets or [])[:10]]
 
+        roi_7d = float(roi_summary.get('roi_7d') or 0)
+        roi_30d = float(roi_summary.get('roi_30d') or 0)
         prompt = f"""
-当前ROI: 7天{roi_summary.get('roi_7d', 0):.1f}%, 30天{roi_summary.get('roi_30d', 0):.1f}%
+当前ROI: 7天{roi_7d:.1f}%, 30天{roi_30d:.1f}%
 止损状态: {'激活' if stop_loss.get('active') else '未激活'} (阈值{stop_loss.get('threshold', -30)}%)
 近期投注: {json.dumps(bets_simple, ensure_ascii=False)}
 

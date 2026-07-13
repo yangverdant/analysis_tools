@@ -217,8 +217,12 @@ export default {
       { icon: 'SettingsIcon', label: '设置' }
     ]
 
-    // 页面加载时自动同步数据
+    // 页面加载时自动同步数据(5分钟内不重复触发)
     const startAutoSync = async () => {
+      const lastSync = localStorage.getItem('lastFullSync')
+      if (lastSync && Date.now() - parseInt(lastSync) < 5 * 60 * 1000) {
+        return  // 5分钟内已同步过
+      }
       try {
         syncStatus.value = { status: 'syncing', message: '正在同步数据...' }
         const response = await fetch('/api/v1/sync/full', {
@@ -227,8 +231,8 @@ export default {
         })
         const data = await response.json()
         if (data.success) {
+          localStorage.setItem('lastFullSync', String(Date.now()))
           syncStatus.value = { status: 'done', message: data.message || '同步任务已启动' }
-          // 3秒后清除状态
           setTimeout(() => { syncStatus.value = null }, 3000)
         } else {
           syncStatus.value = { status: 'error', message: '同步失败' }
