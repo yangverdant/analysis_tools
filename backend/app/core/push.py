@@ -387,6 +387,14 @@ def _rank_value_bets(predictions: List[dict]) -> List[dict]:
                 edge = model_prob - implied_prob if implied_prob > 0 else model_prob - 0.33
                 conf_map = {'high': 0.8, 'medium': 0.6, 'low': 0.4, 'avoid': 0.2}
                 conf_numeric = conf_map.get(rqspf.get('confidence_level') or rqspf.get('confidence_tier') or 'medium', 0.5)
+                # Gate: for integer handicap, if model picks 让胜/让负 but 让平 probability
+                # is significant (>=0.20), the edge is unreliable — skip this bet
+                handicap_val = rqspf.get('handicap', 0)
+                rqspf_draw_prob = rqspf_probs.get('1', 0) or 0
+                if rqspf_rec != '1' and rqspf_draw_prob >= 0.20 and handicap_val and abs(handicap_val - round(handicap_val)) < 0.01:
+                    # 让平概率显著时, 让胜/让负的edge不可靠, 降级为avoid
+                    conf_numeric = 0.2
+                    edge *= 0.3
                 if model_prob > 0:
                     candidate_bets.append({
                         'play_type': 'rqspf',
@@ -410,7 +418,7 @@ def _rank_value_bets(predictions: List[dict]) -> List[dict]:
 
             # 取该场最大期望价值的玩法作为推荐
             # EV = edge × play_type_accuracy (而非纯edge, 避免rqspf高edge低准确率)
-            play_accuracy = {'spf': 0.54, 'rqspf': 0.48, 'ou': 0.51, 'bqc': 0.31, 'bf': 0.27}
+            play_accuracy = {'spf': 0.54, 'rqspf': 0.40, 'ou': 0.51, 'bqc': 0.31, 'bf': 0.27}
             for cb in candidate_bets:
                 pt = cb.get('play_type', 'spf')
                 cb['ev'] = cb.get('edge', 0) * play_accuracy.get(pt, 0.4)
@@ -512,7 +520,15 @@ def _record_bets(db_path: str, bets: List[dict]):
             # 从lottery_odds获取体彩实际赔率
             real_odds = _get_real_odds(cursor, lm_id, play_type, selection)
             if not real_odds:
-                real_odds = bet.get('model_prob', 0)  # fallback: 用概率(旧字段prob已改名)
+                # fallback: 用1/model_prob转为近似赔率, 无概率则跳过
+                # RQSPF不用此fallback — model_prob偏斜严重, 1/p会给出荒谬赔率
+                if play_type == 'rqspf':
+                    continue
+                model_prob = bet.get('model_prob', 0)
+                if model_prob and model_prob > 0.05:
+                    real_odds = round(1.0 / model_prob, 2)
+                else:
+                    continue  # 无有效赔率, 不记录该投注
 
             # 虚拟投注: 基础100元, Kelly比例调整
             kelly = bet.get('kelly', 0)
@@ -566,6 +582,9 @@ def _get_real_odds(cursor, lottery_match_id: str, play_type: str, selection: str
                         return odds_value
                 except Exception:
                     continue
+        # RQSPF必须有实际赔率, 不用model_prob fallback(会给出荒谬值如0.745)
+        if play_type == 'rqspf':
+            return 0
         return 0
     except Exception:
         return 0

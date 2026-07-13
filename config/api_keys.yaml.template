@@ -1,0 +1,20 @@
+# api_keys.yaml 模板
+# 实际文件位置: /opt/football_tools/config/api_keys.yaml
+# 请将此模板复制到服务器并填入真实密钥
+
+anthropic:
+  # 讯飞MaaS中转Anthropic API
+  base_url: "https://maas-coding-api.cn-huabei-1.xf-yun.com/anthropic"
+  api_key: "your-api-key-here"   # 格式: xxx:yyy (APIKey:APISecret)
+  model: "astron-code-latest"
+
+deepseek:
+  # DeepSeek API (已过期, 仅作降级fallback)
+  base_url: "https://api.deepseek.com"
+  api_key: ""
+  model: "deepseek-chat"
+
+# 其他API keys (用于fetcher数据源)
+# apifootball_key: ""
+# the_odds_api_key: ""
+# football_data_org_key: ""

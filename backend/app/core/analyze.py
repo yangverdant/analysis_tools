@@ -1579,9 +1579,9 @@ def _apply_spf_market_anchor(result: dict, probs: dict, model_key: str, model_pr
         return False
     if market_gap < _env_float('FOOTBALL_SPF_MARKET_ANCHOR_GAP', 0.12, 0.0, 1.0):
         return False
-    if model_prob > _env_float('FOOTBALL_SPF_MARKET_ANCHOR_MAX_MODEL_PROB', 0.52, 0.0, 1.0):
+    if model_prob > _env_float('FOOTBALL_SPF_MARKET_ANCHOR_MAX_MODEL_PROB', 0.60, 0.0, 1.0):
         return False
-    if model_gap > _env_float('FOOTBALL_SPF_MARKET_ANCHOR_MAX_MODEL_GAP', 0.12, 0.0, 1.0):
+    if model_gap > _env_float('FOOTBALL_SPF_MARKET_ANCHOR_MAX_MODEL_GAP', 0.20, 0.0, 1.0):
         return False
 
     market_weight = _env_float('FOOTBALL_SPF_MARKET_ANCHOR_WEIGHT', 0.62, 0.0, 1.0)
@@ -2424,7 +2424,7 @@ def _apply_intelligence_adjustment(db_path: str, match: dict, result: dict) -> N
         _inject_intelligence_overlay_weights(result, factors)
         _append_intelligence_adjustment_note(result, adjustment)
     except Exception as e:
-        logger.debug('intelligence adjustment skipped: %s', e)
+        logger.warning('intelligence adjustment skipped: %s', e)
 
 
 def _add_market_movement_delta(artifact: Optional[dict], deltas: Dict[str, float], factors: List[dict]) -> None:
@@ -4365,6 +4365,21 @@ def _apply_bqc_stability_reuse(db_path: str, match: dict, plays: dict) -> bool:
     preserved = _clone_jsonable(previous_bqc)
     if not isinstance(preserved, dict):
         return False
+    # Remove stale phase_axis_adjustment from reused BQC (it was disabled due to negative impact)
+    had_phase_axis = 'phase_axis_adjustment' in preserved
+    preserved.pop('phase_axis_adjustment', None)
+    # If the old recommendation was changed by phase_axis_adjustment,
+    # check if it's still the argmax from probabilities — if not, revert to probability-max
+    if had_phase_axis:
+        probs = preserved.get('probabilities') or {}
+        if probs:
+            max_key = max(probs, key=probs.get)
+            old_rec = preserved.get('recommendation') or preserved.get('direction') or ''
+            if old_rec != max_key:
+                preserved['recommendation'] = max_key
+                _bqc_cn = {'hh': '胜胜', 'hd': '胜平', 'ha': '胜负', 'dh': '平胜', 'dd': '平平', 'da': '平负', 'ah': '负胜', 'ad': '负平', 'aa': '负负'}
+                preserved['recommendation_cn'] = _bqc_cn.get(max_key, max_key)
+                preserved['direction'] = max_key
     preserved['stability_reuse'] = {
         'applied': True,
         'reason': 'reuse_last_accepted_bqc_until_bqc_gate_passes',
@@ -4465,9 +4480,12 @@ def _compute_plays_from_probs(probs, expected, match, db_path: str = None) -> di
         # 从xG推算最可能的比分(简化)
         h_score = round(home_xg)
         a_score = round(away_xg)
+        away_fav = probs.get('away_win', 0) > probs.get('home_win', 0)
+        second_h = h_score if away_fav else h_score + 1
+        second_a = a_score + 1 if away_fav else a_score
         top3 = [
-            {'score': '{}-{}'.format(h_score, a_score), 'probability': 0},
-            {'score': '{}-{}'.format(h_score, a_score + 1 if probs.get('away_win', 0) > probs.get('home_win', 0) else h_score + 1, a_score), 'probability': 0},
+            {'score': f'{h_score}-{a_score}', 'probability': 0},
+            {'score': f'{second_h}-{second_a}', 'probability': 0},
             {'score': '1-1', 'probability': 0},
         ]
 
@@ -6365,14 +6383,13 @@ def _apply_play_risk_profiles(plays: dict, result: dict, score_matrix=None) -> N
 
 
 def _normalize_matrix(score_matrix) -> list:
-    """将score_matrix转为0-1概率矩阵
-
-    score_matrix可能是百分比(总和≈100)或小数(总和≈1)
-    """
+    """将score_matrix归一化为概率矩阵(总和=1.0)"""
     total = sum(sum(row) for row in score_matrix)
-    if total > 1.5:  # 百分比格式
-        return [[v / 100.0 for v in row] for row in score_matrix]
-    return score_matrix  # 已经是小数
+    if total <= 0:
+        return score_matrix
+    if abs(total - 1.0) < 0.01:
+        return score_matrix  # 已归一化
+    return [[v / total for v in row] for row in score_matrix]
 
 
 def _matrix_expected_goals(score_matrix) -> dict:
@@ -8146,6 +8163,40 @@ def _compute_rqspf(
         'veto_reason': None,
     }
 
+    # --- Market-calibrated draw probability for integer handicap ---
+    # The Poisson score_matrix systematically underestimates exact-margin
+    # draw (让平) for integer handicaps.  Empirical data shows actual 让平
+    # for hc=1.0 is ~26%, but model often gives 0.01-0.15.  Calibrate
+    # toward market probabilities when available.
+    rounded_handicap = round(handicap)
+    if abs(handicap) >= 1.0 and abs(handicap - rounded_handicap) < 1e-9 and market_probs:
+        market_draw = _to_float(market_probs.get('1'), 0.0) or 0.0
+        for proj in (unconditional, axis_projection):
+            if not proj or not isinstance(proj.get('probabilities'), dict):
+                continue
+            probs = proj['probabilities']
+            model_draw = _to_float(probs.get('1'), 0.0) or 0.0
+            # If model draw is far below market, calibrate upward
+            min_draw = max(0.18, market_draw - 0.05)
+            if model_draw < min_draw:
+                deficit = min_draw - model_draw
+                # Distribute deficit from top two directions proportionally
+                others = [(k, _to_float(v, 0.0)) for k, v in probs.items() if k != '1' and _to_float(v, 0.0) > 0]
+                total_other = sum(v for _, v in others)
+                if total_other > deficit:
+                    for k, v in others:
+                        probs[k] = round(v - deficit * (v / total_other), 4)
+                    probs['1'] = round(min_draw, 4)
+                    proj['probabilities'] = probs
+                    if proj.get('direction') and max(probs, key=probs.get) != proj.get('direction'):
+                        proj['direction'] = max(probs, key=probs.get)
+                        proj['recommendation_cn'] = {'3': '让胜', '1': '让平', '0': '让负'}.get(proj['direction'], '')
+                    proj['_market_calibrated_draw'] = {
+                        'before': round(model_draw, 4),
+                        'after': round(min_draw, 4),
+                        'market_draw': round(market_draw, 4),
+                    }
+
     display_source = 'unconditional'
     display = unconditional
     axis_can_display = bool(
@@ -8328,6 +8379,10 @@ def _compute_rqspf(
             'from_cn': {'3': '让胜', '1': '让平', '0': '让负'}.get(integer_boundary_adjustment.get('from'), ''),
             'to_cn': '让平',
         }
+    if unconditional.get('_market_calibrated_draw'):
+        result['market_calibrated_draw'] = unconditional['_market_calibrated_draw']
+    elif axis_projection and axis_projection.get('_market_calibrated_draw'):
+        result['market_calibrated_draw'] = axis_projection['_market_calibrated_draw']
     return result
 
 
@@ -9700,13 +9755,12 @@ def _load_scene_ht_transition(db_path: str, scene: str) -> Optional[dict]:
 
     Returns: {'h': {'h': p, 'd': p, 'a': p}, 'd': {...}, 'a': {...}} 或 None
     """
-    if not db_path or scene:
-        pass  # fall through to default
     if not db_path or not scene:
         return None
     try:
-        import sqlite3, json
-        conn = sqlite3.connect(db_path)
+        import sqlite3 as _sqlite3
+        import json as _json
+        conn = _sqlite3.connect(db_path)
         try:
             row = conn.execute("""
                 SELECT new_value FROM model_params_history
@@ -9714,7 +9768,7 @@ def _load_scene_ht_transition(db_path: str, scene: str) -> Optional[dict]:
                 ORDER BY changed_at DESC LIMIT 1
             """, (f'bqc_ht_transition_{scene}_attribution',)).fetchone()
             if row and row[0]:
-                data = json.loads(row[0])
+                data = _json.loads(row[0])
                 # 必须三个key都有
                 if not all(k in data for k in ('h', 'd', 'a')):
                     return None
@@ -9726,6 +9780,11 @@ def _load_scene_ht_transition(db_path: str, scene: str) -> Optional[dict]:
                 transition = {k: data[k] for k in ('h', 'd', 'a')}
                 if transition['h']['h'] < 0.40 or transition['a']['a'] < 0.40:
                     return None
+                # 归一化检查: 每行概率之和应≈1.0
+                for row_key in ('h', 'd', 'a'):
+                    row_sum = sum(transition[row_key].values())
+                    if abs(row_sum - 1.0) > 0.05:
+                        return None
                 return transition
         finally:
             conn.close()
@@ -9862,6 +9921,7 @@ def _compute_bqc(
     #   HT=1(平局): FT=3 43.5%, FT=1 33.7%, FT=0 22.8%
     #   HT=0(客胜): FT=3 23.2%, FT=1 16.1%, FT=0 60.7%
     # Key change vs 30K dataset: P(FT=h|HT=d) 34.9%→43.5%, reducing dd over-prediction
+    # 回测验证: h→h=0.762最优(27.0%), 降低到0.71反而降到24.3%
     _EMPIRICAL_TRANSITION = {
         'h': {'h': 0.762, 'd': 0.175, 'a': 0.062},
         'd': {'h': 0.435, 'd': 0.337, 'a': 0.228},
@@ -9943,7 +10003,7 @@ def _compute_bqc(
                     bqc_probs[k] = round(bqc_probs[k] / total, 3)
 
     # 推荐：半全场是全场方向的路径推导，先在胜平负主轴内择优。
-    # 始终约束到SPF全场方向(数据验证: always-axis=35.8% vs gated-axis=34.2%)
+    # 始终约束到SPF全场方向(回测验证: axis=23% > no_axis=10.8%)
     axis_enabled = _env_float('FOOTBALL_BQC_SPF_AXIS_ENABLED', 1.0, 0.0, 1.0) >= 1.0
     axis_target = {'3': 'h', '1': 'd', '0': 'a'}.get(str(full_time_axis or '')) if axis_enabled else ''
     constrained_probs = {
@@ -9954,7 +10014,8 @@ def _compute_bqc(
     rec_pool = constrained_probs or bqc_probs
     rec = max(rec_pool, key=rec_pool.get) if rec_pool else 'dd'
     phase_axis_adjustment = None
-    if axis_target and constrained_probs:
+    # 回测验证: phase_axis_adjustment 12次改变推荐, 0帮助5伤害, 净-5 — 禁用
+    if False and axis_target and constrained_probs:
         half_axis_probs = {'h': half_home, 'd': half_draw, 'a': half_away}
         same_half = half_axis_probs.get(axis_target, 0.0)
         draw_half = half_axis_probs.get('d', 0.0)
@@ -9984,7 +10045,7 @@ def _compute_bqc(
             min_candidate_ratio = (
                 _env_float('FOOTBALL_BQC_PHASE_MIN_RATIO_AWAY', 1.0, 0.0, 1.5)
                 if axis_target == 'a'
-                else _env_float('FOOTBALL_BQC_PHASE_MIN_RATIO_HOME_DRAW', 0.85, 0.0, 1.5)
+                else _env_float('FOOTBALL_BQC_PHASE_MIN_RATIO_HOME_DRAW', 1.0, 0.0, 1.5)
             )
             if max_constrained <= 0 or constrained_probs[phase_candidate] >= max_constrained * min_candidate_ratio:
                 phase_axis_adjustment = {
@@ -10108,4 +10169,6 @@ def _compute_bqc(
                 soft_full_axis_adjustment.get('full_time_axis'), ''
             ),
         }
+    # 禁用phase_axis_adjustment输出(回测验证: 净-5, 12次改变0帮助5伤害)
+    result.pop('phase_axis_adjustment', None)
     return result

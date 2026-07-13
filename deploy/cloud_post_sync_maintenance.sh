@@ -136,13 +136,73 @@ Unit=football-learning-refresh.service
 WantedBy=timers.target
 EOF
 
+  cat >/etc/systemd/system/football-daily-morning.service <<EOF
+[Unit]
+Description=Football daily morning cycle (perceive → learn)
+Wants=network-online.target
+After=network-online.target football-analyst.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=$PROJECT_DIR
+Environment=FOOTBALL_TOOLS_ROOT=$PROJECT_DIR
+Environment=DB_PATH=$DB_PATH
+Environment=PYTHONUNBUFFERED=1
+ExecStart=$PROJECT_DIR/scripts/cloud_daily_morning.sh
+Nice=5
+EOF
+
+  cat >/etc/systemd/system/football-daily-morning.timer <<EOF
+[Unit]
+Description=Run football daily morning cycle at 06:30 Beijing
+
+[Timer]
+OnCalendar=*-*-* 06:30 Asia/Shanghai
+Persistent=true
+Unit=football-daily-morning.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  cat >/etc/systemd/system/football-daily-push.service <<EOF
+[Unit]
+Description=Football daily push (TOP3 + Agent report + stop-loss)
+Wants=network-online.target
+After=network-online.target football-analyst.service
+
+[Service]
+Type=oneshot
+User=ubuntu
+WorkingDirectory=$PROJECT_DIR
+Environment=FOOTBALL_TOOLS_ROOT=$PROJECT_DIR
+Environment=DB_PATH=$DB_PATH
+Environment=TZ=Asia/Shanghai
+Environment=PYTHONUNBUFFERED=1
+ExecStart=$PROJECT_DIR/scripts/cloud_daily_push.sh
+EOF
+
+  cat >/etc/systemd/system/football-daily-push.timer <<EOF
+[Unit]
+Description=Run football daily push at 09:00 Beijing
+
+[Timer]
+OnCalendar=*-*-* 09:00 Asia/Shanghai
+Persistent=true
+Unit=football-daily-push.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
   if crontab -l >/tmp/football_root_crontab 2>/dev/null; then
     grep -v 'backend.app.core.daily_runner' /tmp/football_root_crontab >/tmp/football_root_crontab.filtered || true
     crontab /tmp/football_root_crontab.filtered
   fi
 
   systemctl daemon-reload
-  systemctl enable --now football-automation-tick.timer football-learning-refresh.timer >/dev/null
+  systemctl enable --now football-automation-tick.timer football-learning-refresh.timer football-daily-morning.timer football-daily-push.timer >/dev/null
 }
 
 ensure_data_permissions
