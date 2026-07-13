@@ -1,20 +1,17 @@
 """概率校准模块 — 用历史验证数据校准模型概率
 
-问题: 模型预测概率系统性偏差
-  - spf avg_prob=50.3% 但实际 55.7% (低估5.4pp)
-  - rqspf avg_prob=59.2% 但实际 48.7% (高估10.5pp)
-  - bqc avg_prob=46.5% 但实际 36.8% (高估9.7pp)
-
-方案: 分桶校准 (Isotonic-like)
-  1. 把历史 predicted_prob 按 0.1 步长分桶 [0.0-0.1, 0.1-0.2, ..., 0.9-1.0]
+方案: 分桶校准 + 保序回归(Isotonic Regression)
+  1. 把历史 predicted_prob 按 0.1 步长分桶
   2. 计算每桶的实际命中率
-  3. 预测时: 模型概率 → 找到对应桶 → 返回该桶的历史命中率
+  3. 保序回归: 合并非单调相邻桶, 保证校准后概率单调递增
+  4. 预测时: 模型概率 → 找到对应桶 → 返回校准后概率
 
-这样 argmax 决策会用校准后的概率, 直接提升命中率。
+保序回归确保: 模型概率越高 → 校准后概率也越高(或至少不低),
+避免小样本噪声导致非单调校准(如rqspf 0.9-1.0桶25%但0.7-0.8桶58%).
 """
 import sqlite3
 import logging
-from typing import Optional
+from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -36,8 +33,67 @@ def _ensure_calibration_table(conn):
     conn.commit()
 
 
+def _isotonic_regression(buckets: List[Tuple[float, float, int]]) -> List[Tuple[float, float, int]]:
+    """Pool Adjacent Violators Algorithm (PAVA) for isotonic regression.
+
+    Args:
+        buckets: [(bucket_lower, raw_accuracy, sample_size), ...] sorted by bucket_lower
+
+    Returns:
+        [(bucket_lower, calibrated_prob, merged_sample_size), ...] with monotonic non-decreasing probs.
+        Only the first bucket_lower of each merged group is returned.
+    """
+    if len(buckets) <= 1:
+        return list(buckets)
+
+    # Stack of (weighted_sum, total_weight, start_idx, end_idx)
+    stack: List[Tuple[float, float, int, int]] = []
+    for i, (bl, acc, n) in enumerate(buckets):
+        stack.append((acc * n, float(n), i, i))
+        while len(stack) >= 2:
+            prev_wsum, prev_w, prev_start, prev_end = stack[-2]
+            curr_wsum, curr_w, _, curr_end = stack[-1]
+            prev_val = prev_wsum / prev_w
+            curr_val = curr_wsum / curr_w
+            if prev_val > curr_val + 1e-9:
+                stack[-2] = (prev_wsum + curr_wsum, prev_w + curr_w, prev_start, curr_end)
+                stack.pop()
+            else:
+                break
+
+    result = []
+    for wsum, w, start_idx, _ in stack:
+        bl = buckets[start_idx][0]
+        result.append((bl, wsum / w, int(w)))
+    return result
+
+
+def _apply_isotonic_to_buckets(buckets: list, iso: list) -> dict:
+    """Map each original bucket_lower to its isotonic calibrated value.
+
+    Args:
+        buckets: original bucket list with 'bucket_lower' keys
+        iso: isotonic regression result [(start_bl, calibrated, n), ...]
+
+    Returns:
+        {bucket_lower: calibrated_prob}
+    """
+    mapping = {}
+    for b in buckets:
+        bl = b['bucket_lower']
+        # Find the iso group this bucket belongs to (latest start_bl <= bl)
+        best_cal = b['actual_acc']
+        for iso_bl, iso_cal, _ in iso:
+            if iso_bl <= bl + 0.001:
+                best_cal = iso_cal
+            else:
+                break
+        mapping[bl] = best_cal
+    return mapping
+
+
 def compute_calibration(db_path: str, days: int = 60, min_sample: int = 5) -> dict:
-    """从历史验证数据计算校准曲线
+    """从历史验证数据计算校准曲线 (含保序回归)
 
     Returns: {play_type: [{bucket, model_prob, actual_acc, sample, calibrated_prob}]}
     """
@@ -45,11 +101,9 @@ def compute_calibration(db_path: str, days: int = 60, min_sample: int = 5) -> di
     conn.row_factory = sqlite3.Row
     _ensure_calibration_table(conn)
 
-    # 清空旧数据
     conn.execute("DELETE FROM probability_calibration")
 
     cursor = conn.cursor()
-    # 按 0.1 步长分桶统计
     cursor.execute("""
         SELECT play_type,
                ROUND(predicted_prob * 10) / 10 as bucket_lower,
@@ -66,49 +120,77 @@ def compute_calibration(db_path: str, days: int = 60, min_sample: int = 5) -> di
     """, (f'-{days} days', min_sample))
 
     rows = [dict(r) for r in cursor.fetchall()]
-    result = {}
-    inserted = 0
 
+    # Group by play_type, then apply isotonic regression per type
+    by_type: dict = {}
     for r in rows:
         pt = r['play_type']
         bl = r['bucket_lower']
         if bl is None:
             continue
-        bucket_lower = float(bl)
-        bucket_upper = bucket_lower + 0.1
-        actual_acc = float(r['acc'])
-        n = int(r['n'])
-
-        # 校准后的概率 = 该桶实际命中率 (clamped to [0.05, 0.95])
-        calibrated = max(0.05, min(0.95, actual_acc))
-
-        cursor.execute("""
-            INSERT OR REPLACE INTO probability_calibration
-            (play_type, bucket_lower, bucket_upper, calibrated_prob,
-             sample_size, actual_accuracy, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
-        """, (pt, bucket_lower, bucket_upper, calibrated, n, actual_acc))
-
-        if pt not in result:
-            result[pt] = []
-        result[pt].append({
-            'bucket': f'{bucket_lower:.1f}-{bucket_upper:.1f}',
-            'model_prob': round(float(r['avg_model_prob']), 3),
-            'actual_acc': round(actual_acc, 3),
-            'calibrated_prob': round(calibrated, 3),
-            'sample': n,
+        by_type.setdefault(pt, []).append({
+            'bucket_lower': float(bl),
+            'bucket_upper': float(bl) + 0.1,
+            'actual_acc': float(r['acc']),
+            'n': int(r['n']),
+            'avg_model_prob': float(r['avg_model_prob']),
         })
-        inserted += 1
+
+    result = {}
+    inserted = 0
+
+    for pt, buckets in by_type.items():
+        # Step 1: Bayesian smoothing — shrink each bucket toward global mean
+        # This prevents small-sample buckets from causing excessive merging
+        total_n = sum(b['n'] for b in buckets)
+        total_correct = sum(b['actual_acc'] * b['n'] for b in buckets)
+        global_acc = total_correct / total_n if total_n > 0 else 0.5
+        # Prior strength: equivalent to 20 pseudo-observations (moderate shrinkage)
+        prior_n = 20
+        smoothed = []
+        for b in buckets:
+            # Bayesian: (correct + prior_n * global_acc) / (n + prior_n)
+            bayes_acc = (b['actual_acc'] * b['n'] + prior_n * global_acc) / (b['n'] + prior_n)
+            smoothed.append((b['bucket_lower'], bayes_acc, b['n']))
+
+        # Step 2: Apply isotonic regression on smoothed values
+        iso = _isotonic_regression(smoothed)
+        iso_map = _apply_isotonic_to_buckets(buckets, iso)
+
+        for b in buckets:
+            bl = b['bucket_lower']
+            calibrated = max(0.05, min(0.95, iso_map[bl]))
+
+            cursor.execute("""
+                INSERT OR REPLACE INTO probability_calibration
+                (play_type, bucket_lower, bucket_upper, calibrated_prob,
+                 sample_size, actual_accuracy, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+            """, (pt, bl, bl + 0.1, calibrated, b['n'], b['actual_acc']))
+
+            if pt not in result:
+                result[pt] = []
+            result[pt].append({
+                'bucket': f'{bl:.1f}-{bl + 0.1:.1f}',
+                'model_prob': round(b['avg_model_prob'], 3),
+                'actual_acc': round(b['actual_acc'], 3),
+                'calibrated_prob': round(calibrated, 3),
+                'sample': b['n'],
+            })
+            inserted += 1
 
     conn.commit()
     conn.close()
-    logger.info('概率校准完成: %d个桶, 覆盖%d个玩法', inserted, len(result))
+    logger.info('概率校准完成(含保序回归): %d个桶, 覆盖%d个玩法', inserted, len(result))
     return {'buckets': inserted, 'play_types': list(result.keys()), 'detail': result}
 
 
 def get_calibrated_probability(db_path: str, play_type: str,
                                 model_prob: float) -> Optional[float]:
     """获取校准后的概率 — 供analyze调用
+
+    使用线性插值: 在相邻桶之间插值, 避免阶梯式跳变。
+    若无精确匹配, 使用最近的桶(距离加权)。
 
     Args:
         play_type: spf/ou/bf/rqspf/bqc
@@ -122,15 +204,46 @@ def get_calibrated_probability(db_path: str, play_type: str,
     try:
         conn = sqlite3.connect(db_path, timeout=5)
         conn.row_factory = sqlite3.Row
-        # 找到对应桶
-        bucket_lower = round(model_prob * 10) / 10
-        row = conn.execute("""
-            SELECT calibrated_prob FROM probability_calibration
-            WHERE play_type = ? AND ABS(bucket_lower - ?) < 0.001
-        """, (play_type, bucket_lower)).fetchone()
+        rows = conn.execute("""
+            SELECT bucket_lower, calibrated_prob FROM probability_calibration
+            WHERE play_type = ?
+            ORDER BY bucket_lower
+        """, (play_type,)).fetchall()
         conn.close()
-        if row:
-            return float(row['calibrated_prob'])
+        if not rows:
+            return None
+
+        # Linear interpolation between adjacent buckets
+        bucket_lower = round(model_prob * 10) / 10
+        # Find exact match first
+        for r in rows:
+            if abs(r['bucket_lower'] - bucket_lower) < 0.001:
+                return float(r['calibrated_prob'])
+
+        # No exact match — find surrounding buckets and interpolate
+        lower_row = None
+        upper_row = None
+        for r in rows:
+            bl = float(r['bucket_lower'])
+            if bl < bucket_lower:
+                lower_row = r
+            elif bl > bucket_lower and upper_row is None:
+                upper_row = r
+
+        if lower_row and upper_row:
+            # Linear interpolation
+            x0 = float(lower_row['bucket_lower'])
+            x1 = float(upper_row['bucket_lower'])
+            y0 = float(lower_row['calibrated_prob'])
+            y1 = float(upper_row['calibrated_prob'])
+            if abs(x1 - x0) > 1e-9:
+                t = (bucket_lower - x0) / (x1 - x0)
+                return round(y0 + t * (y1 - y0), 4)
+
+        # Fallback: nearest bucket
+        nearest = lower_row or upper_row
+        if nearest:
+            return float(nearest['calibrated_prob'])
         return None
     except Exception as e:
         logger.debug('校准查询失败: %s', e)

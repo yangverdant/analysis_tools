@@ -3574,31 +3574,48 @@ def _selected_play_probability(play_type: str, play: dict, result: dict, plays: 
     return _to_float(play.get('confidence'), None)
 
 
-def _load_historical_play_quality(db_path: str, play_type: str, predicted_result: str, scenario_type: str) -> dict:
+def _load_historical_play_quality(db_path: str, play_type: str, predicted_result: str, scenario_type: str, league_name: str = '') -> dict:
     if not db_path or not play_type or not predicted_result:
         return {}
     try:
         conn = sqlite3.connect(db_path, timeout=10)
         conn.row_factory = sqlite3.Row
         scopes = []
+        # League+scenario scope (most specific, highest signal)
+        if league_name and scenario_type:
+            scopes.append(('league_scenario', scenario_type, league_name))
+        # League scope (e.g., "挪超 SPF 63%")
+        if league_name:
+            scopes.append(('league', None, league_name))
+        # Scenario scope
         if scenario_type:
-            scopes.append(('scenario', scenario_type))
-        scopes.append(('global', None))
-        for scope, scenario in scopes:
+            scopes.append(('scenario', scenario_type, None))
+        # Global fallback
+        scopes.append(('global', None, None))
+        for scope, scenario, league in scopes:
             params = [play_type, predicted_result]
             scenario_filter = ''
+            league_filter = ''
             if scenario:
-                scenario_filter = 'AND scenario_type = ?'
+                scenario_filter = 'AND lv.scenario_type = ?'
                 params.append(scenario)
+            if league:
+                league_filter = 'AND lm.league_name_cn = ?'
+                params.append(league)
+            join_clause = ''
+            if league:
+                join_clause = 'JOIN lottery_matches lm ON lv.lottery_match_id = lm.lottery_match_id'
             row = conn.execute(
                 f"""
                 SELECT COUNT(*) AS sample_size,
-                       COALESCE(SUM(CASE WHEN is_correct = 1 THEN 1 ELSE 0 END), 0) AS correct
-                FROM lottery_validation
-                WHERE play_type = ?
-                  AND predicted_result = ?
-                  AND actual_result IS NOT NULL
+                       COALESCE(SUM(CASE WHEN lv.is_correct = 1 THEN 1 ELSE 0 END), 0) AS correct
+                FROM lottery_validation lv
+                {join_clause}
+                WHERE lv.play_type = ?
+                  AND lv.predicted_result = ?
+                  AND lv.actual_result IS NOT NULL
                   {scenario_filter}
+                  {league_filter}
                 """,
                 params,
             ).fetchone()
@@ -3658,6 +3675,7 @@ def _apply_selective_recommendation_guard(db_path: str, match: dict, result: dic
     if not plays:
         return
     scenario_type = _analysis_scenario_type(match or {}, result)
+    league_name = match.get('league_name_cn') or match.get('league_name_en') or ''
     summary = {
         'scenario_type': scenario_type,
         'applied': True,
@@ -3671,7 +3689,7 @@ def _apply_selective_recommendation_guard(db_path: str, match: dict, result: dic
         prediction_key = _play_prediction_key(play_type, play, result, plays)
         probability = _selected_play_probability(play_type, play, result, plays)
         base_tier = _base_tier_from_probability(play_type, probability)
-        quality = _load_historical_play_quality(db_path, play_type, prediction_key, scenario_type)
+        quality = _load_historical_play_quality(db_path, play_type, prediction_key, scenario_type, league_name)
         tier, reason = _tier_after_historical_quality(play_type, base_tier, probability, quality)
 
         risk_profile = play.get('risk_profile') if isinstance(play.get('risk_profile'), dict) else {}
@@ -3715,7 +3733,7 @@ def _apply_selective_recommendation_guard(db_path: str, match: dict, result: dic
 
     bf_key = _play_prediction_key('bf', {}, result, plays)
     bf_prob = _selected_play_probability('bf', {}, result, plays)
-    bf_quality = _load_historical_play_quality(db_path, 'bf', bf_key, scenario_type)
+    bf_quality = _load_historical_play_quality(db_path, 'bf', bf_key, scenario_type, league_name)
     bf_tier, bf_reason = _tier_after_historical_quality('bf', _base_tier_from_probability('bf', bf_prob), bf_prob, bf_quality)
     summary['plays']['bf'] = {
         'tier': bf_tier,
@@ -3822,6 +3840,59 @@ def _compute_all_plays(result: dict, match: dict, ou_result: dict = None, db_pat
 
     # 1. 胜平负(SPF) — 直接用final概率
     spf_rec = max(probs, key=probs.get) if probs else 'unknown'
+
+    # Draw override: when model confidence is low and draw probability is significant,
+    # the model tends to pick home_win by default (argmax breaks ties toward home).
+    # But historically, league matches have ~23% draw rate, and the model never predicts
+    # draw in league matches (0/188 predictions). This override corrects that bias.
+    if spf_rec == 'home_win':
+        draw_prob = float(probs.get('draw', 0) or 0)
+        home_prob = float(probs.get('home_win', 0) or 0)
+        away_prob = float(probs.get('away_win', 0) or 0)
+        gap_home_draw = home_prob - draw_prob
+        # Conditions for draw override:
+        # 1. Draw probability >= 0.22 (significant)
+        # 2. Gap between top direction and draw is small (< 0.08)
+        # 3. Top direction confidence is not high (< 0.45)
+        if draw_prob >= 0.22 and gap_home_draw < 0.08 and home_prob < 0.45:
+            # Check odds calibration for this match's bucket
+            draw_boost_from_market = False
+            try:
+                ob = result.get('odds_baseline')
+                if ob and isinstance(ob, dict):
+                    home_ob = float(ob.get('home_win', 0) or 0)
+                    if home_ob > 0:
+                        home_odds_val = 1.0 / home_ob
+                        cal = None
+                        cal_conn = sqlite3.connect(db_path, timeout=5) if db_path else None
+                        if cal_conn:
+                            cal_row = cal_conn.execute(
+                                "SELECT cal_data FROM odds_calibration WHERE cal_key = 'odds_bucket_accuracy'"
+                            ).fetchone()
+                            cal_conn.close()
+                            if cal_row:
+                                cal = json.loads(cal_row[0]) if isinstance(cal_row[0], str) else cal_row[0]
+                        if cal:
+                            for name, lo, hi in [('<1.30', 0, 1.30), ('1.30-1.60', 1.30, 1.60),
+                                                  ('1.60-2.00', 1.60, 2.00), ('2.00-3.00', 2.00, 3.00),
+                                                  ('>3.00', 3.00, 999)]:
+                                if lo <= home_odds_val < hi:
+                                    bucket_draw = cal.get(name, {}).get('draw_rate', 0)
+                                    if bucket_draw >= 0.22:
+                                        draw_boost_from_market = True
+                                    break
+            except Exception:
+                pass
+            if draw_boost_from_market:
+                spf_rec = 'draw'
+                result['_draw_override'] = {
+                    'original': 'home_win',
+                    'reason': 'low_confidence_high_draw_market_support',
+                    'draw_prob': round(draw_prob, 3),
+                    'home_prob': round(home_prob, 3),
+                    'gap': round(gap_home_draw, 3),
+                }
+
     spf_map = {'home_win': '3', 'draw': '1', 'away_win': '0'}
     plays['spf'] = {
         'direction': spf_map.get(spf_rec, '?'),
